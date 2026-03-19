@@ -1,0 +1,84 @@
+# ==========================================
+# Python 项目
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+venv/
+env/
+ENV/
+.env
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# ==========================================
+# 敏感配置（数据库密码等）
+# ==========================================
+config.py
+.env.local
+.env.*.local
+secrets.json
+*.pem
+tidb-ca.pem
+
+# ==========================================
+# IDE 和编辑器（DataGrip / PyCharm / VS Code）
+# ==========================================
+.idea/
+*.iml
+*.iws
+.vscode/
+*.swp
+*.swo
+*~
+
+# ==========================================
+# 操作系统
+# ==========================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ==========================================
+# 项目特定（新闻检索系统）
+# ==========================================
+# 日志文件
+logs/
+*.log
+news_crawler.log
+
+# 临时下载的新闻文件
+tmp/
+temp/
+data/raw/
+*.csv
+*.xlsx
+*.json.bak
+
+# 前端构建（如果以后用 npm）
+node_modules/
+dist/
+build/
