@@ -1,0 +1,11 @@
+{
+  "ExpandedNodes": [
+    "",
+    "\\news_dashboard",
+    "\\news_dashboard\\certs",
+    "\\news_dashboard\\config",
+    "\\news_dashboard\\core",
+    "\\news_dashboard\\scheduler"
+  ],
+  "PreviewInSolutionExplorer": false
+}
