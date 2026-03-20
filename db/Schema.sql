@@ -1,0 +1,525 @@
+-- QuickNews - 完整Schema脚本
+-- MySQL 8.0+ TiDB Cloud
+-- utf8mb4（支持中文及Emoji）
+
+-- 创建数据库（如果残存测试表，删除测试表）
+USE test_connection;
+DROP TABLE IF EXISTS test_table;
+
+-- A：独立基础表（无外键依赖）
+
+-- A1. countries 国家维度表
+-- 用途：地图可视化、主要关联国标记
+CREATE TABLE IF NOT EXISTS countries (
+    country_code CHAR(2) NOT NULL COMMENT 'ISO 3166-1 alpha-2（如CN, US）',
+    country_name VARCHAR(50) NOT NULL COMMENT '中文国家名',
+    country_name_en VARCHAR(50) COMMENT '英文国家名',
+    latitude DECIMAL(10,8) COMMENT '国家中心纬度',
+    longitude DECIMAL(11,8) COMMENT '国家中心经度',
+    continent VARCHAR(20) COMMENT '大洲（亚洲、北美洲等）',
+    PRIMARY KEY (country_code),
+    INDEX idx_continent (continent)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+COMMENT='国家地理信息表';
+
+-- A2. sources 消息来源表
+-- 用途：管理RSS/爬取源，追踪新闻出处
+CREATE TABLE IF NOT EXISTS sources (
+    source_id INT AUTO_INCREMENT COMMENT '来源ID',
+    source_name VARCHAR(100) NOT NULL COMMENT '来源名称（如BBC中文）',
+    source_url VARCHAR(500) COMMENT 'RSS或官网URL',
+    source_type ENUM('rss','api','crawler') DEFAULT 'rss' COMMENT '采集方式',
+    language CHAR(2) DEFAULT 'zh' COMMENT '语言代码（zh/en）',
+    reliability_score TINYINT COMMENT '可信度评分1-10',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (source_id),
+    UNIQUE KEY uk_source_url (source_url),
+    CONSTRAINT chk_reliability CHECK (reliability_score BETWEEN 1 AND 10)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+COMMENT='新闻来源管理';
+
+-- A3. categories 固定板块表
+-- 用途：科技、政治、经济等预设分类
+CREATE TABLE IF NOT EXISTS categories (
+    category_id INT AUTO_INCREMENT COMMENT '板块ID',
+    category_name VARCHAR(50) NOT NULL COMMENT '板块名（如科技）',
+    category_code VARCHAR(20) NOT NULL COMMENT '代码（tech/politics/economy）',
+    color_code VARCHAR(7) DEFAULT '#333333' COMMENT '前端展示颜色（如#3498db）',
+    sort_order INT DEFAULT 0 COMMENT '前端显示顺序',
+    PRIMARY KEY (category_id),
+    UNIQUE KEY uk_category_code (category_code)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+COMMENT='新闻固定板块';
+
+
+-- B：核心实体表（依赖sources）
+
+-- B1. news 新闻主表（核心）
+-- 注意：48小时清理基于此表的created_at字段
+CREATE TABLE IF NOT EXISTS news (
+    news_id BIGINT AUTO_INCREMENT COMMENT '新闻ID（bigint防海量数据）',
+    title VARCHAR(300) NOT NULL COMMENT '标题（全文检索字段）',
+    summary VARCHAR(1000) COMMENT '摘要/正文前200字',
+    source_url VARCHAR(768) COMMENT '原文链接（去重依据）',
+    source_id INT COMMENT '来源ID',
+    published_at DATETIME COMMENT '新闻发布时间',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '入库时间（48h清理依据）',
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    language CHAR(2) DEFAULT 'zh' COMMENT '语言',
+    video_url VARCHAR(800) COMMENT '视频链接（内网路径或外网embed）',
+    has_video BOOLEAN DEFAULT FALSE COMMENT '是否有视频（快速过滤）',
+    click_count INT DEFAULT 0 COMMENT '点击次数（热度排序）',
+
+    PRIMARY KEY (news_id),
+    UNIQUE KEY uk_source_url (source_url),
+    -- 48小时滑动窗口查询优化（最关键索引）
+    INDEX idx_created_at (created_at),
+    -- 按来源查最新新闻
+    INDEX idx_source_time (source_id, created_at),
+
+    -- 外键约束（如使用PlanetScale等不支持外键的数据库，请删除此约束）
+    CONSTRAINT fk_news_source FOREIGN KEY (source_id)
+        REFERENCES sources(source_id) ON DELETE SET NULL ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+COMMENT='新闻主表（48小时生命周期）';
+
+
+-- C：关联表（多对多关系）
+
+-- C1. news_countries 新闻-国家关联表
+-- 关键字段：is_primary 标记主要关联国（网页高亮显示）
+CREATE TABLE IF NOT EXISTS news_countries (
+    id BIGINT AUTO_INCREMENT,
+    news_id BIGINT NOT NULL COMMENT '新闻ID',
+    country_code CHAR(2) NOT NULL COMMENT '国家代码',
+    is_primary BOOLEAN DEFAULT FALSE COMMENT '是否为主要关联国（页面高亮）',
+    mention_count INT DEFAULT 1 COMMENT '提及次数（权重计算）',
+
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_news_country (news_id, country_code),
+
+    -- 关键查询优化：查某国主要新闻 + 时间排序
+    INDEX idx_country_primary_time (country_code, is_primary, news_id),
+
+    -- 外键（云数据库不支持可删除）
+    CONSTRAINT fk_nc_news FOREIGN KEY (news_id)
+        REFERENCES news(news_id) ON DELETE CASCADE,
+    CONSTRAINT fk_nc_country FOREIGN KEY (country_code)
+        REFERENCES countries(country_code) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+COMMENT='新闻与国家的多对多关联（支持多国标记）';
+
+-- C2. news_categories 新闻-板块关联表
+-- 支持一条新闻属于多个板块（如既是科技又是经济）
+CREATE TABLE IF NOT EXISTS news_categories (
+    id BIGINT AUTO_INCREMENT,
+    news_id BIGINT NOT NULL COMMENT '新闻ID',
+    category_id INT NOT NULL COMMENT '板块ID',
+    confidence FLOAT DEFAULT 1.0 COMMENT '分类置信度（0-1）',
+
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_news_category (news_id, category_id),
+    INDEX idx_category_news (category_id, news_id),
+
+    -- 外键（云数据库不支持可删除）
+    CONSTRAINT fk_ncat_news FOREIGN KEY (news_id)
+        REFERENCES news(news_id) ON DELETE CASCADE,
+    CONSTRAINT fk_ncat_category FOREIGN KEY (category_id)
+        REFERENCES categories(category_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+COMMENT='新闻与板块的多对多关联';
+
+
+-- D：媒体与检索系统表
+
+-- D1. media 媒体资源表（图片/视频）
+-- 视频策略：外网存embed链接，内网存/static/路径
+CREATE TABLE IF NOT EXISTS media (
+    media_id BIGINT AUTO_INCREMENT,
+    news_id BIGINT NOT NULL COMMENT '所属新闻',
+    media_type ENUM('image','video') NOT NULL COMMENT '媒体类型',
+    media_url VARCHAR(800) NOT NULL COMMENT 'URL或本地路径',
+    is_cover BOOLEAN DEFAULT FALSE COMMENT '是否为封面图',
+    width INT COMMENT '宽度px（前端布局用）',
+    height INT COMMENT '高度px',
+    file_size_kb INT COMMENT '文件大小KB',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (media_id),
+    INDEX idx_news_media (news_id, media_type),
+    INDEX idx_cover (is_cover),
+
+    -- 外键（云数据库不支持可删除）
+    CONSTRAINT fk_media_news FOREIGN KEY (news_id)
+        REFERENCES news(news_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+COMMENT='新闻图片与视频资源';
+
+-- D2. inverted_index 倒排索引表（IR系统核心）
+-- 手动实现全文检索，支持TF-IDF排序
+-- 注意：此表数据量大，建议单独分区或定期清理（与news同步生命周期）
+CREATE TABLE IF NOT EXISTS inverted_index (
+    term VARCHAR(100) NOT NULL COMMENT '词项（分词后的单词）',
+    news_id BIGINT NOT NULL COMMENT '新闻ID',
+    tf_weight FLOAT DEFAULT 1.0 COMMENT '词频权重（TF值）',
+    field_type ENUM('title','content') DEFAULT 'content' COMMENT '出现位置',
+    position INT COMMENT '在文档中的位置（可选）',
+
+    PRIMARY KEY (term, news_id, field_type),
+    INDEX idx_term (term),
+
+    -- 外键（云数据库不支持可删除，且高频写入场景外键影响性能）
+    CONSTRAINT fk_idx_news FOREIGN KEY (news_id)
+        REFERENCES news(news_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+COMMENT='倒排索引表（支持全文检索与相关性排序）';
+
+-- E：初始数据填充（基础维度数据）
+-- E1. 插入主要国家数据（Top 20，覆盖新闻高频地区）
+INSERT INTO countries (country_code, country_name, country_name_en, latitude, longitude, continent) VALUES
+('CN', '中国', 'China', 35.8617, 104.1954, '亚洲'),
+('IN', '印度', 'India', 20.5937, 78.9629, '亚洲'),
+('ID', '印度尼西亚', 'Indonesia', -0.7893, 113.9213, '亚洲'),
+('PK', '巴基斯坦', 'Pakistan', 30.3753, 69.3451, '亚洲'),
+('BD', '孟加拉国', 'Bangladesh', 23.6850, 90.3563, '亚洲'),
+('JP', '日本', 'Japan', 36.2048, 138.2529, '亚洲'),
+('PH', '菲律宾', 'Philippines', 12.8797, 121.7740, '亚洲'),
+('VN', '越南', 'Vietnam', 14.0583, 108.2772, '亚洲'),
+('TR', '土耳其', 'Turkey', 38.9637, 35.2433, '亚洲'),
+('IR', '伊朗', 'Iran', 32.4279, 53.6880, '亚洲'),
+('TH', '泰国', 'Thailand', 15.8700, 100.9925, '亚洲'),
+('MM', '缅甸', 'Myanmar', 21.9162, 95.9560, '亚洲'),
+('KR', '韩国', 'South Korea', 35.9078, 127.7669, '亚洲'),
+('IQ', '伊拉克', 'Iraq', 33.2232, 43.6793, '亚洲'),
+('SA', '沙特阿拉伯', 'Saudi Arabia', 23.8859, 45.0792, '亚洲'),
+('UZ', '乌兹别克斯坦', 'Uzbekistan', 41.3775, 64.5853, '亚洲'),
+('MY', '马来西亚', 'Malaysia', 4.2105, 101.9758, '亚洲'),
+('AF', '阿富汗', 'Afghanistan', 33.9391, 67.7100, '亚洲'),
+('NP', '尼泊尔', 'Nepal', 28.3949, 84.1240, '亚洲'),
+('YE', '也门', 'Yemen', 15.5527, 48.5164, '亚洲'),
+('KP', '朝鲜', 'North Korea', 40.3399, 127.5101, '亚洲'),
+('LK', '斯里兰卡', 'Sri Lanka', 7.8731, 80.7718, '亚洲'),
+('KZ', '哈萨克斯坦', 'Kazakhstan', 48.0196, 66.9237, '亚洲'),
+('SY', '叙利亚', 'Syria', 34.8021, 38.9968, '亚洲'),
+('KH', '柬埔寨', 'Cambodia', 12.5657, 104.9910, '亚洲'),
+('JO', '约旦', 'Jordan', 30.5852, 36.2384, '亚洲'),
+('AZ', '阿塞拜疆', 'Azerbaijan', 40.1431, 47.5769, '亚洲'),
+('AE', '阿联酋', 'United Arab Emirates', 23.4241, 53.8478, '亚洲'),
+('TJ', '塔吉克斯坦', 'Tajikistan', 38.8610, 71.2761, '亚洲'),
+('IL', '以色列', 'Israel', 31.0461, 34.8516, '亚洲'),
+('LA', '老挝', 'Laos', 19.8563, 102.4955, '亚洲'),
+('LB', '黎巴嫩', 'Lebanon', 33.8547, 35.8623, '亚洲'),
+('SG', '新加坡', 'Singapore', 1.3521, 103.8198, '亚洲'),
+('OM', '阿曼', 'Oman', 21.4735, 55.9754, '亚洲'),
+('KW', '科威特', 'Kuwait', 29.3117, 47.4818, '亚洲'),
+('GE', '格鲁吉亚', 'Georgia', 32.1656, -82.9001, '亚洲'),
+('MN', '蒙古', 'Mongolia', 46.8625, 103.8467, '亚洲'),
+('AM', '亚美尼亚', 'Armenia', 40.0691, 45.0382, '亚洲'),
+('QA', '卡塔尔', 'Qatar', 25.3548, 51.1839, '亚洲'),
+('BH', '巴林', 'Bahrain', 26.0667, 50.5577, '亚洲'),
+('TL', '东帝汶', 'Timor-Leste', -8.8742, 125.7275, '亚洲'),
+('CY', '塞浦路斯', 'Cyprus', 35.1264, 33.4299, '亚洲'),
+('BT', '不丹', 'Bhutan', 27.5142, 90.4336, '亚洲'),
+('MV', '马尔代夫', 'Maldives', 3.2028, 73.2207, '亚洲'),
+('BN', '文莱', 'Brunei', 4.5353, 114.7277, '亚洲'),
+('KG', '吉尔吉斯斯坦', 'Kyrgyzstan', 41.2044, 74.7661, '亚洲'),
+('TM', '土库曼斯坦', 'Turkmenistan', 38.9697, 59.5563, '亚洲'),
+('PS', '巴勒斯坦', 'State of Palestine', 31.9522, 35.2332, '亚洲'),
+('TW', '中国台湾省', 'Taiwan', 23.6978, 120.9605, '亚洲'),
+('HK', '中国香港', 'Hong Kong', 22.3193, 114.1694, '亚洲'),
+('MO', '中国澳门', 'Macau', 22.1987, 113.5439, '亚洲');
+
+-- 2. 欧洲（Europe）- 44个国家和地区
+INSERT INTO countries (country_code, country_name, country_name_en, latitude, longitude, continent) VALUES
+('RU', '俄罗斯', 'Russia', 61.5240, 105.3188, '欧洲'),
+('DE', '德国', 'Germany', 51.1657, 10.4515, '欧洲'),
+('GB', '英国', 'United Kingdom', 55.3781, -3.4360, '欧洲'),
+('FR', '法国', 'France', 46.2276, 2.2137, '欧洲'),
+('IT', '意大利', 'Italy', 41.8719, 12.5674, '欧洲'),
+('ES', '西班牙', 'Spain', 40.4637, -3.7492, '欧洲'),
+('UA', '乌克兰', 'Ukraine', 48.3794, 31.1656, '欧洲'),
+('PL', '波兰', 'Poland', 51.9194, 19.1451, '欧洲'),
+('RO', '罗马尼亚', 'Romania', 45.9432, 24.9668, '欧洲'),
+('NL', '荷兰', 'Netherlands', 52.1326, 5.2913, '欧洲'),
+('BE', '比利时', 'Belgium', 50.5039, 4.4699, '欧洲'),
+('CZ', '捷克', 'Czech Republic', 49.8175, 15.4730, '欧洲'),
+('GR', '希腊', 'Greece', 39.0742, 21.8243, '欧洲'),
+('PT', '葡萄牙', 'Portugal', 39.3999, -8.2245, '欧洲'),
+('SE', '瑞典', 'Sweden', 60.1282, 18.6435, '欧洲'),
+('HU', '匈牙利', 'Hungary', 47.1625, 19.5033, '欧洲'),
+('BY', '白俄罗斯', 'Belarus', 53.7098, 27.9534, '欧洲'),
+('AT', '奥地利', 'Austria', 47.5162, 14.5501, '欧洲'),
+('CH', '瑞士', 'Switzerland', 46.8182, 8.2275, '欧洲'),
+('RS', '塞尔维亚', 'Serbia', 44.0165, 21.0059, '欧洲'),
+('BG', '保加利亚', 'Bulgaria', 42.7339, 25.4858, '欧洲'),
+('DK', '丹麦', 'Denmark', 56.2639, 9.5018, '欧洲'),
+('FI', '芬兰', 'Finland', 61.9241, 25.7482, '欧洲'),
+('NO', '挪威', 'Norway', 60.4720, 8.4689, '欧洲'),
+('SK', '斯洛伐克', 'Slovakia', 48.6690, 19.6990, '欧洲'),
+('IE', '爱尔兰', 'Ireland', 53.1424, -7.6921, '欧洲'),
+('HR', '克罗地亚', 'Croatia', 45.1000, 15.2000, '欧洲'),
+('BA', '波黑', 'Bosnia and Herzegovina', 43.9159, 17.6791, '欧洲'),
+('AL', '阿尔巴尼亚', 'Albania', 41.1533, 20.1683, '欧洲'),
+('LT', '立陶宛', 'Lithuania', 55.1694, 23.8813, '欧洲'),
+('SI', '斯洛文尼亚', 'Slovenia', 46.1512, 14.9955, '欧洲'),
+('LV', '拉脱维亚', 'Latvia', 56.8796, 24.6032, '欧洲'),
+('EE', '爱沙尼亚', 'Estonia', 58.5953, 25.0136, '欧洲'),
+('MD', '摩尔多瓦', 'Moldova', 47.4116, 28.3699, '欧洲'),
+('LU', '卢森堡', 'Luxembourg', 49.8153, 6.1296, '欧洲'),
+('MT', '马耳他', 'Malta', 35.9375, 14.3754, '欧洲'),
+('IS', '冰岛', 'Iceland', 64.9631, -19.0208, '欧洲'),
+('MK', '北马其顿', 'North Macedonia', 41.6086, 21.7453, '欧洲'),
+('ME', '黑山', 'Montenegro', 42.7087, 19.3744, '欧洲'),
+('AD', '安道尔', 'Andorra', 42.5063, 1.5218, '欧洲'),
+('LI', '列支敦士登', 'Liechtenstein', 47.1660, 9.5554, '欧洲'),
+('MC', '摩纳哥', 'Monaco', 43.7384, 7.4246, '欧洲'),
+('SM', '圣马力诺', 'San Marino', 43.9424, 12.4578, '欧洲'),
+('VA', '梵蒂冈', 'Vatican City', 41.9029, 12.4534, '欧洲'),
+('XK', '科索沃', 'Kosovo', 42.6026, 20.9030, '欧洲');
+
+-- 3. 非洲（Africa）- 54个国家和地区
+INSERT INTO countries (country_code, country_name, country_name_en, latitude, longitude, continent) VALUES
+('NG', '尼日利亚', 'Nigeria', 9.0820, 8.6753, '非洲'),
+('ET', '埃塞俄比亚', 'Ethiopia', 9.1450, 40.4897, '非洲'),
+('EG', '埃及', 'Egypt', 26.8206, 30.8025, '非洲'),
+('CD', '刚果（金）', 'DR Congo', -4.0383, 21.7587, '非洲'),
+('TZ', '坦桑尼亚', 'Tanzania', -6.3690, 34.8888, '非洲'),
+('ZA', '南非', 'South Africa', -30.5595, 22.9375, '非洲'),
+('KE', '肯尼亚', 'Kenya', -0.0236, 37.9062, '非洲'),
+('UG', '乌干达', 'Uganda', 1.3733, 32.2903, '非洲'),
+('SD', '苏丹', 'Sudan', 12.8628, 30.2176, '非洲'),
+('DZ', '阿尔及利亚', 'Algeria', 28.0339, 1.6596, '非洲'),
+('MA', '摩洛哥', 'Morocco', 31.7917, -7.0926, '非洲'),
+('AO', '安哥拉', 'Angola', -11.2027, 17.8739, '非洲'),
+('GH', '加纳', 'Ghana', 7.9465, -1.0232, '非洲'),
+('MZ', '莫桑比克', 'Mozambique', -18.6657, 35.5296, '非洲'),
+('MG', '马达加斯加', 'Madagascar', -18.7669, 46.8691, '非洲'),
+('CM', '喀麦隆', 'Cameroon', 7.3697, 12.3547, '非洲'),
+('CI', '科特迪瓦', 'Ivory Coast', 7.5400, -5.5471, '非洲'),
+('NE', '尼日尔', 'Niger', 17.6078, 8.0817, '非洲'),
+('BF', '布基纳法索', 'Burkina Faso', 12.2383, -1.5616, '非洲'),
+('ML', '马里', 'Mali', 17.5707, -3.9962, '非洲'),
+('MW', '马拉维', 'Malawi', -13.2543, 34.3015, '非洲'),
+('ZM', '赞比亚', 'Zambia', -13.1339, 27.8493, '非洲'),
+('SO', '索马里', 'Somalia', 5.1521, 46.1996, '非洲'),
+('SN', '塞内加尔', 'Senegal', 14.4974, -14.4524, '非洲'),
+('TD', '乍得', 'Chad', 15.4542, 18.7322, '非洲'),
+('ZW', '津巴布韦', 'Zimbabwe', -19.0154, 29.1549, '非洲'),
+('GN', '几内亚', 'Guinea', 9.9456, -9.6966, '非洲'),
+('RW', '卢旺达', 'Rwanda', -1.9403, 29.8739, '非洲'),
+('SS', '南苏丹', 'South Sudan', 6.8770, 31.3070, '非洲'),
+('BJ', '贝宁', 'Benin', 9.3077, 2.3158, '非洲'),
+('TN', '突尼斯', 'Tunisia', 33.8869, 9.5375, '非洲'),
+('BI', '布隆迪', 'Burundi', -3.3731, 29.9189, '非洲'),
+('LS', '莱索托', 'Lesotho', -29.6100, 28.2336, '非洲'),
+('TG', '多哥', 'Togo', 8.6195, 0.8248, '非洲'),
+('SL', '塞拉利昂', 'Sierra Leone', 8.4606, -11.7799, '非洲'),
+('LY', '利比亚', 'Libya', 26.3351, 17.2283, '非洲'),
+('LR', '利比里亚', 'Liberia', 6.4281, -9.4295, '非洲'),
+('MR', '毛里塔尼亚', 'Mauritania', 21.0079, -10.9408, '非洲'),
+('ER', '厄立特里亚', 'Eritrea', 15.1794, 39.7823, '非洲'),
+('GM', '冈比亚', 'Gambia', 13.4432, -15.3101, '非洲'),
+('BW', '博茨瓦纳', 'Botswana', -22.3285, 24.6849, '非洲'),
+('GA', '加蓬', 'Gabon', -0.8037, 11.6094, '非洲'),
+('GW', '几内亚比绍', 'Guinea-Bissau', 11.8037, -15.1804, '非洲'),
+('GQ', '赤道几内亚', 'Equatorial Guinea', 1.6508, 10.2679, '非洲'),
+('MU', '毛里求斯', 'Mauritius', -20.3484, 57.5522, '非洲'),
+('SZ', '斯威士兰', 'Eswatini', -26.5225, 31.4659, '非洲'),
+('DJ', '吉布提', 'Djibouti', 11.8251, 42.5903, '非洲'),
+('KM', '科摩罗', 'Comoros', -11.6520, 43.3726, '非洲'),
+('CV', '佛得角', 'Cape Verde', 16.5388, -23.0418, '非洲'),
+('ST', '圣多美和普林西比', 'Sao Tome and Principe', 0.1864, 6.6131, '非洲'),
+('SC', '塞舌尔', 'Seychelles', -4.6796, 55.4920, '非洲'),
+('EH', '西撒哈拉', 'Western Sahara', 24.2155, -12.8858, '非洲');
+
+-- 4. 北美洲（North America）- 23个国家和地区
+INSERT INTO countries (country_code, country_name, country_name_en, latitude, longitude, continent) VALUES
+('US', '美国', 'United States', 37.0902, -95.7129, '北美洲'),
+('CA', '加拿大', 'Canada', 56.1304, -106.3468, '北美洲'),
+('MX', '墨西哥', 'Mexico', 23.6345, -102.5528, '北美洲'),
+('GT', '危地马拉', 'Guatemala', 15.7835, -90.2308, '北美洲'),
+('CU', '古巴', 'Cuba', 21.5218, -77.7812, '北美洲'),
+('HT', '海地', 'Haiti', 18.9712, -72.2852, '北美洲'),
+('DO', '多米尼加', 'Dominican Republic', 18.7357, -70.1627, '北美洲'),
+('HN', '洪都拉斯', 'Honduras', 15.2000, -86.2419, '北美洲'),
+('NI', '尼加拉瓜', 'Nicaragua', 12.8654, -85.2072, '北美洲'),
+('CR', '哥斯达黎加', 'Costa Rica', 9.7489, -83.7534, '北美洲'),
+('PA', '巴拿马', 'Panama', 8.5380, -80.7821, '北美洲'),
+('SV', '萨尔瓦多', 'El Salvador', 13.7942, -88.8965, '北美洲'),
+('BZ', '伯利兹', 'Belize', 17.1899, -88.4976, '北美洲'),
+('JM', '牙买加', 'Jamaica', 18.1096, -77.2975, '北美洲'),
+('TT', '特立尼达和多巴哥', 'Trinidad and Tobago', 10.6918, -61.2225, '北美洲'),
+('BS', '巴哈马', 'Bahamas', 25.0343, -77.3963, '北美洲'),
+('BB', '巴巴多斯', 'Barbados', 13.1939, -59.5432, '北美洲'),
+('GD', '格林纳达', 'Grenada', 12.1165, -61.6790, '北美洲'),
+('LC', '圣卢西亚', 'Saint Lucia', 13.9094, -60.9789, '北美洲'),
+('VC', '圣文森特和格林纳丁斯', 'Saint Vincent', 12.9843, -61.2872, '北美洲'),
+('AG', '安提瓜和巴布达', 'Antigua and Barbuda', 17.0608, -61.7964, '北美洲'),
+('KN', '圣基茨和尼维斯', 'Saint Kitts and Nevis', 17.3578, -62.7820, '北美洲'),
+('DM', '多米尼克', 'Dominica', 15.4150, -61.3710, '北美洲');
+
+-- 5. 南美洲（South America）- 12个国家和地区
+INSERT INTO countries (country_code, country_name, country_name_en, latitude, longitude, continent) VALUES
+('BR', '巴西', 'Brazil', -14.2350, -51.9253, '南美洲'),
+('AR', '阿根廷', 'Argentina', -38.4161, -63.6167, '南美洲'),
+('CO', '哥伦比亚', 'Colombia', 4.5709, -74.2973, '南美洲'),
+('PE', '秘鲁', 'Peru', -9.1900, -75.0152, '南美洲'),
+('VE', '委内瑞拉', 'Venezuela', 6.4238, -66.5897, '南美洲'),
+('CL', '智利', 'Chile', -35.6751, -71.5430, '南美洲'),
+('EC', '厄瓜多尔', 'Ecuador', -1.8312, -78.1834, '南美洲'),
+('BO', '玻利维亚', 'Bolivia', -16.2902, -63.5887, '南美洲'),
+('PY', '巴拉圭', 'Paraguay', -23.4425, -58.4438, '南美洲'),
+('UY', '乌拉圭', 'Uruguay', -32.5228, -55.7658, '南美洲'),
+('GY', '圭亚那', 'Guyana', 4.8604, -58.9302, '南美洲'),
+('SR', '苏里南', 'Suriname', 3.9193, -56.0278, '南美洲');
+
+-- 6. 大洋洲（Oceania）- 14个国家和地区
+INSERT INTO countries (country_code, country_name, country_name_en, latitude, longitude, continent) VALUES
+('AU', '澳大利亚', 'Australia', -25.2744, 133.7751, '大洋洲'),
+('PG', '巴布亚新几内亚', 'Papua New Guinea', -6.3150, 143.9555, '大洋洲'),
+('NZ', '新西兰', 'New Zealand', -40.9006, 174.8869, '大洋洲'),
+('FJ', '斐济', 'Fiji', -17.7134, 178.0650, '大洋洲'),
+('SB', '所罗门群岛', 'Solomon Islands', -9.6457, 160.1562, '大洋洲'),
+('VU', '瓦努阿图', 'Vanuatu', -15.3767, 166.9592, '大洋洲'),
+('WS', '萨摩亚', 'Samoa', -13.7590, -172.1046, '大洋洲'),
+('KI', '基里巴斯', 'Kiribati', -3.3704, -168.7340, '大洋洲'),
+('TO', '汤加', 'Tonga', -21.1790, -175.1982, '大洋洲'),
+('FM', '密克罗尼西亚联邦', 'Micronesia', 7.4256, 150.5508, '大洋洲'),
+('PW', '帕劳', 'Palau', 7.5150, 134.5825, '大洋洲'),
+('MH', '马绍尔群岛', 'Marshall Islands', 11.8251, 162.1836, '大洋洲'),
+('NR', '瑙鲁', 'Nauru', -0.5228, 166.9315, '大洋洲'),
+('TV', '图瓦卢', 'Tuvalu', -7.1095, 177.6493, '大洋洲');
+
+-- 7. 其他地区与属地（补充常见新闻提及地区）
+INSERT INTO countries (country_code, country_name, country_name_en, latitude, longitude, continent) VALUES
+('GL', '格陵兰', 'Greenland', 71.7069, -42.6043, '北美洲'),
+('PR', '波多黎各', 'Puerto Rico', 18.2208, -66.5901, '北美洲'),
+('GU', '关岛', 'Guam', 13.4443, 144.7937, '大洋洲'),
+('VI', '美属维尔京群岛', 'US Virgin Islands', 18.3358, -64.8963, '北美洲'),
+('AS', '美属萨摩亚', 'American Samoa', -14.2710, -170.1322, '大洋洲'),
+('KY', '开曼群岛', 'Cayman Islands', 19.3138, -81.2546, '北美洲'),
+('BM', '百慕大', 'Bermuda', 32.3078, -64.7505, '北美洲'),
+('GI', '直布罗陀', 'Gibraltar', 36.1408, -5.3536, '欧洲'),
+('FO', '法罗群岛', 'Faroe Islands', 61.8926, -6.9118, '欧洲'),
+('AX', '奥兰群岛', 'Aland Islands', 60.1785, 19.9156, '欧洲'),
+('SJ', '斯瓦尔巴和扬马延', 'Svalbard', 77.5536, 23.6703, '欧洲'),
+('RE', '留尼汪', 'Reunion', -21.1151, 55.5364, '非洲'),
+('YT', '马约特', 'Mayotte', -12.8275, 45.1662, '非洲'),
+('GP', '瓜德罗普', 'Guadeloupe', 16.2650, -61.5510, '北美洲'),
+('MQ', '马提尼克', 'Martinique', 14.6415, -61.0242, '北美洲'),
+('GF', '法属圭亚那', 'French Guiana', 3.9339, -53.1258, '南美洲'),
+('PF', '法属波利尼西亚', 'French Polynesia', -17.6797, -149.4068, '大洋洲'),
+('NC', '新喀里多尼亚', 'New Caledonia', -20.9043, 165.6180, '大洋洲'),
+('WF', '瓦利斯和富图纳', 'Wallis and Futuna', -13.7688, -177.1561, '大洋洲'),
+('PM', '圣皮埃尔和密克隆', 'Saint Pierre', 46.9419, -56.2711, '北美洲'),
+('BL', '圣巴泰勒米', 'Saint Barthelemy', 17.9000, -62.8333, '北美洲'),
+('MF', '法属圣马丁', 'Saint Martin', 18.0826, -63.0523, '北美洲'),
+('SX', '荷属圣马丁', 'Sint Maarten', 18.0425, -63.0548, '北美洲'),
+('AW', '阿鲁巴', 'Aruba', 12.5211, -69.9683, '北美洲'),
+('CW', '库拉索', 'Curacao', 12.1696, -68.9900, '北美洲'),
+('BQ', '荷属加勒比区', 'Bonaire', 12.1784, -68.2385, '北美洲'),
+('AI', '安圭拉', 'Anguilla', 18.2206, -63.0686, '北美洲'),
+('MS', '蒙特塞拉特', 'Montserrat', 16.7425, -62.1874, '北美洲'),
+('VG', '英属维尔京群岛', 'British Virgin Islands', 18.4207, -64.6400, '北美洲'),
+('TC', '特克斯和凯科斯群岛', 'Turks and Caicos', 21.6940, -71.7979, '北美洲'),
+('FK', '福克兰群岛', 'Falkland Islands', -51.7963, -59.5236, '南美洲'),
+('GG', '根西岛', 'Guernsey', 49.4657, -2.5853, '欧洲'),
+('JE', '泽西岛', 'Jersey', 49.2144, -2.1313, '欧洲'),
+('IM', '马恩岛', 'Isle of Man', 54.2361, -4.5481, '欧洲');
+
+-- E2. 插入固定板块（与网页端导航栏对应）
+INSERT INTO categories (category_name, category_code, color_code, sort_order) VALUES
+('科技', 'tech', '#3498db', 1),      -- 蓝色
+('政治', 'politics', '#e74c3c', 2), -- 红色
+('经济', 'economy', '#2ecc71', 3),  -- 绿色
+('军事', 'military', '#9b59b6', 4), -- 紫色
+('文化', 'culture', '#f39c12', 5),  -- 橙色
+('体育', 'sports', '#1abc9c', 6),   -- 青色
+('社会', 'society', '#34495e', 7),  -- 深灰
+('国际', 'international', '#e67e22', 8); -- 橙红（综合）
+
+-- E3. 插入示例新闻来源（RSS源）
+INSERT INTO sources (source_name, source_url, source_type, language, reliability_score) VALUES
+('Reuters - World News', 'http://feeds.reuters.com/reuters/worldNews', 'rss', 'en', 9),
+('BBC News - World', 'http://feeds.bbci.co.uk/news/world/rss.xml', 'rss', 'en', 9),
+('Associated Press', 'https://apnews.com/hub/world-news', 'crawler', 'en', 9),
+('Reuters - China', 'http://feeds.reuters.com/reuters/chinaNews', 'rss', 'en', 8),
+('财新网', 'http://www.caixin.com/rss.xml', 'rss', 'zh', 8),
+('澎湃新闻', 'https://www.thepaper.cn/rss.xml', 'rss', 'zh', 7),
+('界面新闻', 'https://www.jiemian.com/rss.xml', 'rss', 'zh', 7),
+('36氪', 'https://36kr.com/feed', 'rss', 'zh', 6),
+('TechCrunch', 'https://techcrunch.com/feed/', 'rss', 'en', 7),
+('The Verge', 'https://www.theverge.com/rss/index.xml', 'rss', 'en', 7);
+
+
+-- F：验证与测试查询（执行后可删除测试数据）
+
+-- F1. 验证表结构完整性
+SELECT
+    table_name,
+    table_comment,
+    table_rows,
+    engine
+FROM information_schema.tables
+WHERE table_schema = 'information_schema'
+ORDER BY table_name;
+
+-- F2. 验证48小时清理机制的SQL语句（生产环境由Python定时执行，此处仅测试）
+-- 查看即将被删除的数据（48小时前）
+SELECT COUNT(*) as old_news_count
+FROM news
+WHERE created_at < DATE_SUB(NOW(), INTERVAL 48 HOUR);
+
+-- 查看保留的数据（近48小时）
+SELECT COUNT(*) as recent_news_count,
+       MIN(created_at) as earliest_news,
+       MAX(created_at) as latest_news
+FROM news
+WHERE created_at >= DATE_SUB(NOW(), INTERVAL 48 HOUR);
+
+-- F3. 验证索引是否生效（查看新闻时间查询的执行计划）
+EXPLAIN SELECT * FROM news
+WHERE created_at >= DATE_SUB(NOW(), INTERVAL 6 HOUR)
+ORDER BY created_at DESC;
+
+-- 预期结果：type=range, key=idx_created_at（表示使用了时间索引）
+
+-- F4. 验证主要关联国查询优化（查某国主要新闻）
+EXPLAIN SELECT n.*
+FROM news n
+JOIN news_countries nc ON n.news_id = nc.news_id
+WHERE nc.country_code = 'CN'
+  AND nc.is_primary = TRUE
+  AND n.created_at >= DATE_SUB(NOW(), INTERVAL 48 HOUR)
+ORDER BY n.created_at DESC;
+
+-- 预期结果：使用了 idx_country_primary_time 复合索引
+
+-- F5. 验证倒排索引查询（模拟搜索"中国"）
+-- 注意：实际使用时需先插入索引数据，此处仅展示查询结构
+EXPLAIN SELECT term, news_id, tf_weight
+FROM inverted_index
+WHERE term = '中国'
+ORDER BY tf_weight DESC;
+
+
+
+-- 附录：清理与重置（慎用）
+
+/*
+DROP TABLE IF EXISTS inverted_index;
+DROP TABLE IF EXISTS media;
+DROP TABLE IF EXISTS news_categories;
+DROP TABLE IF EXISTS news_countries;
+DROP TABLE IF EXISTS news;
+DROP TABLE IF EXISTS categories;
+DROP TABLE IF EXISTS sources;
+DROP TABLE IF EXISTS countries;
+
+DELETE FROM inverted_index;
+DELETE FROM media;
+DELETE FROM news_categories;
+DELETE FROM news_countries;
+
+DELETE FROM news;
+*/
