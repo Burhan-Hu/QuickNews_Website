@@ -6,234 +6,162 @@ class NewsStorage:
     def __init__(self):
         self.engine = engine
     
+    def save_article_via_procedure(self, article):
+        """
+        单条保存：调用超级存储过程完成所有逻辑（校验/识别/索引都在SQL层）
+        同时保存media（图片/视频）
+        """
+        conn = self.engine.connect()
+        try:
+            # 调用一站式存储过程（长度检查/去重/国家识别/分类/索引都在内部完成）
+            conn.execute(
+                text("""
+                    CALL sp_save_news_complete(
+                        :title, :content, :source_url, :source_id, 
+                        :published_at, :language, :hint_country, :hint_category,
+                        @out_news_id, @out_status
+                    )
+                """),
+                {
+                    'title': article['title'],
+                    'content': article['content'],
+                    'source_url': article['source_url'],
+                    'source_id': article['source_id'],
+                    'published_at': article['published_at'],
+                    'language': article['language'],
+                    'hint_country': article.get('hint_country'),
+                    'hint_category': article.get('hint_category')
+                }
+            )
+            
+            # 获取存储过程返回状态
+            out_result = conn.execute(text("SELECT @out_news_id as news_id, @out_status as status")).fetchone()
+            
+            if out_result and out_result[1] == 'Success':
+                news_id = out_result[0]
+                
+                # 保存media（图片/视频）
+                self._save_media(conn, news_id, article)
+                
+                # 提交事务（关键！否则数据在事务中不可见）
+                conn.commit()
+                return True, news_id
+            else:
+                conn.rollback()
+                return False, out_result[1] if out_result else 'Unknown error'
+                
+        except Exception as e:
+            conn.rollback()  # 出错时回滚
+            return False, f'SQL_Error: {str(e)}'
+        finally:
+            conn.close()
+    
+    def _save_media(self, conn, news_id, article):
+        """保存媒体文件（图片/视频）到media表"""
+        try:
+            # 处理图片
+            images = article.get('images', [])
+            if not images and article.get('image_url'):
+                # 如果只有单个image_url，也处理
+                images = [{'url': article['image_url'], 'alt': '', 'caption': ''}]
+            
+            for idx, img in enumerate(images):
+                if isinstance(img, dict):
+                    url = img.get('url', '')
+                    alt = img.get('alt', '') or img.get('caption', '')
+                else:
+                    url = str(img)
+                    alt = ''
+                
+                if url:
+                    conn.execute(
+                        text("""
+                            INSERT INTO media (news_id, media_type, media_url, is_cover, created_at)
+                            VALUES (:news_id, 'image', :url, :is_cover, NOW())
+                        """),
+                        {
+                            'news_id': news_id,
+                            'url': url[:800],  # 限制长度
+                            'is_cover': (idx == 0)  # 第一张设为封面
+                        }
+                    )
+            
+            # 处理视频
+            videos = article.get('videos', [])
+            for video in videos:
+                if isinstance(video, dict):
+                    url = video.get('url', '') or video.get('src', '')
+                else:
+                    url = str(video)
+                
+                if url:
+                    conn.execute(
+                        text("""
+                            INSERT INTO media (news_id, media_type, media_url, is_cover, created_at)
+                            VALUES (:news_id, 'video', :url, FALSE, NOW())
+                        """),
+                        {
+                            'news_id': news_id,
+                            'url': url[:800]
+                        }
+                    )
+                    
+        except Exception as e:
+            print(f"[Media] 保存媒体失败: {str(e)[:50]}")
+            # 媒体保存失败不阻断主流程
+    
     def save_articles(self, articles):
         """
-        批量保存新闻及关联关系（使用TiDB兼容的SQL）
-        注意：TiDB支持标准MySQL语法，但建议避免过大的事务
+        批量保存：逐条调用存储过程（利用SQL事务保证单条原子性）
+        注意：如需批量事务，需修改存储过程支持多行插入
         """
-        if not articles:
-            return 0
+        success_count = 0
+        failed_count = 0
         
-        # 过滤None值（来自process_article跳过的空数据）
-        articles = [a for a in articles if a is not None]
-        if not articles:
-            return 0
+        for article in articles:
+            success, msg = self.save_article_via_procedure(article)
+            if success:
+                success_count += 1
+            else:
+                failed_count += 1
+                print(f"[Storage] 跳过: {msg}")
         
+        return success_count, failed_count
+    
+    def delete_news_transaction(self, news_id):
+        """
+        显式事务删除（大作业要求的"多表删除"演示）
+        调用SQL存储过程完成5表级联删除
+        """
         conn = self.engine.connect()
-        transaction = conn.begin()
-        
         try:
-            saved_count = 0
-            
-            for article in articles:
-                # 再次验证content和summary不能同时为空
-                content = (article.get('content') or '').strip()
-                summary = (article.get('summary') or '').strip()
-                
-                if not content and not summary:
-                    continue
-                
-                # 1. 检查是否已存在（基于title + source_url的组合去重，更强）
-                check_sql = text("SELECT news_id FROM news WHERE source_url = :url LIMIT 1")
-                result = conn.execute(check_sql, {'url': article['source_url']})
-                existing = result.fetchone()
-                
-                if existing:
-                    # 已存在则跳过（或更新）
-                    continue
-                
-                # 2. 插入主表
-                insert_news_sql = text("""
-                    INSERT INTO news (title, summary, content, source_url, source_id, 
-                            published_at, language, has_video, created_at)
-                    VALUES (:title, :summary, :content, :source_url, :source_id, 
-                           :published_at, :language, :has_video, NOW())
-                """)
-                
-                # 确定语言
-                lang = 'zh' if any('\u4e00' <= c <= '\u9fff' for c in article['title']) else 'en'
-                
-                has_video = bool(article.get('videos'))
-                result = conn.execute(insert_news_sql, {
-                    'title': article['title'][:300],
-                    'summary': article['summary'][:1000] if article['summary'] else None,
-                    'content': article.get('content', '')[:20000],  # 全文，限制2万字防止过大
-                    'source_url': article['source_url'][:800],
-                    'source_id': 1,  # 默认source_id，实际应从sources表查询或创建
-                    'published_at': article['published_at'],
-                    'language': lang,
-                    'has_video': has_video
-                })
-                
-                news_id = result.lastrowid
-                if not news_id:
-                    continue
-                
-                # 3. 插入国家关联
-                for country_code, is_primary, score in article['countries']:
-                    nc_sql = text("""
-                        INSERT INTO news_countries (news_id, country_code, is_primary, mention_count)
-                        VALUES (:news_id, :country_code, :is_primary, :score)
-                    """)
-                    conn.execute(nc_sql, {
-                        'news_id': news_id,
-                        'country_code': country_code,
-                        'is_primary': is_primary,
-                        'score': int(score)
-                    })
-                
-                # 4. 插入分类关联
-                for cat_code, confidence in article['categories']:
-                    # 查询category_id
-                    cat_id_sql = text("SELECT category_id FROM categories WHERE category_code = :code")
-                    cat_result = conn.execute(cat_id_sql, {'code': cat_code})
-                    cat_row = cat_result.fetchone()
-                    
-                    if cat_row:
-                        cat_sql = text("""
-                            INSERT INTO news_categories (news_id, category_id, confidence)
-                            VALUES (:news_id, :cat_id, :confidence)
-                        """)
-                        conn.execute(cat_sql, {
-                            'news_id': news_id,
-                            'cat_id': cat_row[0],
-                            'confidence': confidence
-                        })
-                
-                # 5. 插入媒体（图片/视频）：支持单图、多图、视频流
-                cover_set = False
-
-                if article.get('image_url'):
-                    media_sql = text("""
-                        INSERT INTO media (news_id, media_type, media_url, is_cover)
-                        VALUES (:news_id, 'image', :url, TRUE)
-                    """)
-                    conn.execute(media_sql, {
-                        'news_id': news_id,
-                        'url': article['image_url'][:800]
-                    })
-                    cover_set = True
-
-                if article.get('images'):
-                    image_items = article['images']
-                    if isinstance(image_items, str):
-                        image_items = [image_items]
-
-                    for idx, img_item in enumerate(image_items):
-                        img_url = ''
-                        if isinstance(img_item, str):
-                            img_url = img_item.strip()
-                        elif isinstance(img_item, dict):
-                            img_url = str(img_item.get('url', '') or img_item.get('src', '')).strip()
-                        else:
-                            continue
-
-                        if not img_url:
-                            continue
-
-                        safe_url = img_url[:800]
-                        media_sql = text("""
-                            INSERT INTO media (news_id, media_type, media_url, is_cover)
-                            VALUES (:news_id, 'image', :url, :is_cover)
-                        """)
-                        conn.execute(media_sql, {
-                            'news_id': news_id,
-                            'url': safe_url,
-                            'is_cover': (not cover_set and idx == 0)
-                        })
-                        if not cover_set and idx == 0:
-                            cover_set = True
-
-                if article.get('videos'):
-                    video_items = article['videos']
-                    if isinstance(video_items, str):
-                        video_items = [video_items]
-
-                    # 去重：收集目标URL列表
-                    inserted_videos = set()
-                    
-                    for vid_item in video_items:
-                        vid_url = ''
-                        if isinstance(vid_item, str):
-                            vid_url = vid_item.strip()
-                        elif isinstance(vid_item, dict):
-                            vid_url = str(vid_item.get('url', '') or vid_item.get('src', '')).strip()
-                        else:
-                            continue
-
-                        if not vid_url or vid_url in inserted_videos:
-                            continue
-
-                        # 检查数据库中是否已存在
-                        check_video_sql = text("""
-                            SELECT media_id FROM media 
-                            WHERE news_id = :news_id AND media_type = 'video' AND media_url = :url
-                        """)
-                        existing = conn.execute(check_video_sql, {'news_id': news_id, 'url': vid_url[:800]}).fetchone()
-                        if existing:
-                            inserted_videos.add(vid_url)
-                            continue
-
-                        safe_url = vid_url[:800]
-                        media_sql = text("""
-                            INSERT INTO media (news_id, media_type, media_url, is_cover)
-                            VALUES (:news_id, 'video', :url, FALSE)
-                        """)
-                        conn.execute(media_sql, {
-                            'news_id': news_id,
-                            'url': safe_url
-                        })
-                        inserted_videos.add(vid_url)
-
-                saved_count += 1
-                
-                # TiDB优化：每50条提交一次，避免大事务
-                if saved_count % 50 == 0:
-                    transaction.commit()
-                    transaction = conn.begin()
-            
-            transaction.commit()
-            print(f"[Storage] 成功保存 {saved_count} 条新闻")
-            return saved_count
-            
+            result = conn.execute(
+                text("CALL sp_delete_news_transaction(:news_id, @out_result)"),
+                {'news_id': news_id}
+            )
+            out = conn.execute(text("SELECT @out_result")).fetchone()
+            conn.commit()  # 确保提交
+            return True, out[0] if out else 'Deleted'
         except Exception as e:
-            transaction.rollback()
-            print(f"[Storage] 保存失败: {e}")
-            raise
+            return False, str(e)
         finally:
             conn.close()
     
     def cleanup_old_news(self):
         """
-        清理48小时前的新闻（TiDB支持标准DELETE语法）
+        48小时清理：优先使用SQL Event Scheduler自动清理
+        此方法作为手动触发备份，调用存储过程
         """
         conn = self.engine.connect()
         try:
-            # 由于外键级联，先删关联表或依赖外键自动删除
-            # 注意：TiDB支持外键约束（需确保创建时定义了ON DELETE CASCADE）
-            
-            # 清理倒排索引（如果已构建）
-            conn.execute(text("""
-                DELETE FROM inverted_index 
-                WHERE news_id IN (
-                    SELECT news_id FROM news 
-                    WHERE created_at < DATE_SUB(NOW(), INTERVAL 48 HOUR)
-                )
-            """))
-            
-            # 清理主表（关联表自动清理）
-            result = conn.execute(text("""
-                DELETE FROM news 
-                WHERE created_at < DATE_SUB(NOW(), INTERVAL 48 HOUR)
-            """))
-            
-            deleted = result.rowcount
+            result = conn.execute(text("CALL sp_cleanup_48h()"))
+            row = result.fetchone()
+            deleted = row[0] if row else 0
             conn.commit()
-            print(f"[Cleanup] 清理了 {deleted} 条过期新闻")
+            print(f"[Cleanup] SQL Event方式清理了 {deleted} 条旧新闻")
             return deleted
-            
         except Exception as e:
-            print(f"[Cleanup] 清理失败: {e}")
-            raise
+            print(f"[Cleanup] SQL Event可能未启用，错误: {e}")
+            return 0
         finally:
             conn.close()

@@ -28,13 +28,21 @@ RSS_SOURCES = [
     {'name': '36氪', 'url': 'https://36kr.com/feed', 'lang': 'zh', 'category': 'tech'},
     {'name': '虎嗅网', 'url': 'https://rss.aishort.top/?type=huxiu', 'lang': 'zh', 'category': 'tech'},
     # 国际源
-    {'name': 'ScienceDaily', 'url': 'https://www.sciencedaily.com/rss/all.xml', 'lang': 'en', 'category': 'science'},
-    {'name': '俄罗斯卫星通讯社','url': 'https://sputniknews.cn/export/rss2/archive/index.xml', 'lang': 'zh', 'category': 'international'},
     {'name': 'RT-中文', 'url': 'https://www.rt.com/rss/news/', 'lang': 'en', 'category': 'international'},
-    {'name': '纽约时报-中文', 'url': 'https://cn.nytimes.com/rss.html','lang': 'zh', 'category': 'international'},
-    {'name': 'NYTimes-World', 'url': 'https://rss.nytimes.com/services/xml/rss/nyt/World.xml','lang': 'en', 'category': 'international'},
     {'name': 'FoxNews-World', 'url': 'http://feeds.foxnews.com/foxnews/world','lang': 'en', 'category': 'international','country_hint': 'US'},
-    {'name': 'FoxNews-Politics', 'url': 'http://feeds.foxnews.com/foxnews/politics','lang': 'en', 'category': 'politics','country_hint': 'US'}
+    {'name': 'FoxNews-Politics', 'url': 'http://feeds.foxnews.com/foxnews/politics','lang': 'en', 'category': 'politics','country_hint': 'US'},
+    # 新增RSS源
+    {'name': 'ChinaDaily', 'url': 'https://feedx.net/rss/chinadaily.xml', 'lang': 'en', 'category': 'international'},
+    {'name': 'NewYorker', 'url': 'https://feedx.net/rss/newyorker.xml', 'lang': 'en', 'category': 'culture'},
+    {'name': '凤凰网-军事', 'url': 'https://feedx.net/rss/ifengmil.xml', 'lang': 'zh', 'category': 'military', 'country_hint': 'CN'},
+    {'name': 'AP-美联社', 'url': 'https://feedx.net/rss/ap.xml', 'lang': 'en', 'category': 'international', 'country_hint': 'US'}
+]
+
+# 需要HTML直接抓取的源（不从RSS读取）
+HTML_SOURCES = [
+    {'name': 'ScienceDaily', 'url': 'https://www.sciencedaily.com/news/', 'lang': 'en', 'category': 'science', 'country_hint': 'US'},
+    {'name': '俄罗斯卫星通讯社', 'url': 'https://sputniknews.cn/', 'lang': 'zh', 'category': 'international', 'country_hint': 'RU'},
+    {'name': '纽约时报-中文', 'url': 'https://cn.nytimes.com/', 'lang': 'zh', 'category': 'international', 'country_hint': 'US'},
 ]
 
 class NewsAPIRotator:

@@ -3,7 +3,7 @@
 -- utf8mb4（支持中文及Emoji）
 
 -- 创建数据库（如果残存测试表，删除测试表）
-USE test_connection;
+USE quicknews_maindb;
 DROP TABLE IF EXISTS test_table;
 
 -- A：独立基础表（无外键依赖）
@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS news (
     news_id BIGINT AUTO_INCREMENT COMMENT '新闻ID（bigint防海量数据）',
     title VARCHAR(300) NOT NULL COMMENT '标题（全文检索字段）',
     summary VARCHAR(1000) COMMENT '摘要/正文前200字',
+    content TEXT COMMENT '全文内容',
     source_url VARCHAR(768) COMMENT '原文链接（去重依据）',
     source_id INT COMMENT '来源ID',
     published_at DATETIME COMMENT '新闻发布时间',
@@ -173,6 +174,41 @@ CREATE TABLE IF NOT EXISTS inverted_index (
         REFERENCES news(news_id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 COMMENT='倒排索引表（支持全文检索与相关性排序）';
+-- D3. source_stats 来源统计表（trg_news_after_insert 依赖）
+CREATE TABLE IF NOT EXISTS source_stats (
+    source_id INT NOT NULL COMMENT '来源ID',
+    total_news BIGINT NOT NULL DEFAULT 0 COMMENT '累计新闻数',
+    today_news INT NOT NULL DEFAULT 0 COMMENT '当日新闻数',
+    last_publish_time DATETIME NOT NULL COMMENT '最后入库时间',
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (source_id),
+    CONSTRAINT fk_stat_source FOREIGN KEY (source_id)
+        REFERENCES sources(source_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+COMMENT='来源级别抓取统计（与trg_news_after_insert一致）';
+
+-- 【新增表2：api_request_logs】记录爬虫请求，支撑"系统监控"和凑数
+CREATE TABLE IF NOT EXISTS api_request_logs (
+    log_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    source_id INT COMMENT '来源ID（NULL表示直接API调用）',
+    request_type VARCHAR(20) NOT NULL COMMENT 'newsapi/rss/html',
+    request_url VARCHAR(500),
+    http_status INT,
+    fetched_count INT DEFAULT 0,
+    error_message VARCHAR(500),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (source_id) REFERENCES sources(source_id) ON DELETE SET NULL
+) ENGINE=InnoDB COMMENT='API请求日志表';
+
+-- 【新增表3：index_build_logs】记录存储过程执行，凑数+支撑作业演示
+CREATE TABLE IF NOT EXISTS index_build_logs (
+    log_id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    news_id BIGINT NOT NULL,
+    term_count INT DEFAULT 0 COMMENT '本次构建的词项数',
+    build_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    build_method VARCHAR(20) DEFAULT 'procedure' COMMENT 'procedure/python/manual',
+    FOREIGN KEY (news_id) REFERENCES news(news_id) ON DELETE CASCADE
+) ENGINE=InnoDB COMMENT='索引构建日志表';
 
 -- E：初始数据填充（基础维度数据）
 -- E1. 插入主要国家数据（Top 20，覆盖新闻高频地区）
@@ -451,8 +487,305 @@ INSERT INTO sources (source_name, source_url, source_type, language, reliability
 ('TechCrunch', 'https://techcrunch.com/feed/', 'rss', 'en', 7),
 ('The Verge', 'https://www.theverge.com/rss/index.xml', 'rss', 'en', 7);
 
+-- ============================================================
+-- F：视图（支撑"含有视图的查询"作业）
+-- ============================================================
 
--- F：验证与测试查询（执行后可删除测试数据）
+-- 【新增视图：v_news_detail】封装多表关联，替代Python直接JOIN
+CREATE VIEW v_news_detail AS
+SELECT
+    n.news_id,
+    n.title,
+    n.summary,
+    n.source_url,
+    n.created_at,
+    n.published_at,
+    n.language,
+    n.has_video,
+    s.source_name,
+    s.reliability_score,
+    -- 聚合国家（主国家排第一）
+    (SELECT GROUP_CONCAT(c.country_name ORDER BY nc.is_primary DESC SEPARATOR ', ')
+     FROM news_countries nc
+     JOIN countries c ON nc.country_code = c.country_code
+     WHERE nc.news_id = n.news_id) AS related_countries,
+    (SELECT c.country_code
+     FROM news_countries nc
+     JOIN countries c ON nc.country_code = c.country_code
+     WHERE nc.news_id = n.news_id AND nc.is_primary = 1
+     LIMIT 1) AS primary_country_code,
+    -- 聚合分类
+    (SELECT GROUP_CONCAT(cat.category_name SEPARATOR '/')
+     FROM news_categories ncat
+     JOIN categories cat ON ncat.category_id = cat.category_id
+     WHERE ncat.news_id = n.news_id) AS category_names
+FROM news n
+LEFT JOIN sources s ON n.source_id = s.source_id
+WHERE n.created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR);
+
+-- ============================================================
+-- G：触发器（支撑"触发器控制下的添加"作业）
+-- ============================================================
+
+-- 临时设置分隔符（DataGrip中可直接使用DELIMITER）
+DELIMITER //
+
+-- 【新增触发器1：trg_news_before_insert】自动填充summary（如果为空）
+CREATE TRIGGER trg_news_before_insert
+BEFORE INSERT ON news
+FOR EACH ROW
+BEGIN
+    -- 注意：此时content已经通过存储过程的长度检查
+    IF NEW.summary IS NULL OR CHAR_LENGTH(TRIM(NEW.summary)) = 0 THEN
+        SET NEW.summary = LEFT(NEW.content, 500);
+    END IF;
+END;
+
+-- 【新增触发器2：trg_news_after_insert】自动维护source_stats统计
+CREATE TRIGGER trg_news_after_insert
+AFTER INSERT ON news
+FOR EACH ROW
+BEGIN
+    -- 插入或更新统计表（ON DUPLICATE KEY UPDATE实现UPSERT）
+    INSERT INTO source_stats (source_id, total_news, today_news, last_publish_time)
+    VALUES (NEW.source_id, 1, 1, NEW.created_at)
+    ON DUPLICATE KEY UPDATE
+        total_news = total_news + 1,
+        today_news = CASE
+            WHEN DATE(last_publish_time) = DATE(NEW.created_at) THEN today_news + 1
+            ELSE 1
+        END,
+        last_publish_time = NEW.created_at;
+END //
+
+DELIMITER ;
+
+-- ============================================================
+-- 超级存储过程：一站式新闻入库（替代Python复杂逻辑）
+-- ============================================================
+-- 【新增存储过程2：sp_build_index_and_log】封装索引构建与日志记录（复杂逻辑）
+-- 对应原Python分词后插入inverted_index的逻辑，改为SQL层实现
+CREATE PROCEDURE sp_build_index_and_log(IN p_news_id BIGINT)
+BEGIN
+
+    DECLARE v_title VARCHAR(300) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_content TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_term_count INT DEFAULT 0;
+    -- 强制统一字符集和排序规则（解决collation冲突）
+    SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci;
+    -- 获取新闻内容
+    SELECT title, summary INTO v_title, v_content FROM news WHERE news_id = p_news_id;
+
+    -- 模拟分词：将标题按空格拆分（简化版，实际生产可用ngram）
+    -- 插入倒排索引（英文单词示例）
+    INSERT IGNORE INTO inverted_index (term, news_id, tf_weight, field_type)
+    SELECT DISTINCT LOWER(SUBSTRING_INDEX(SUBSTRING_INDEX(v_title, ' ', n.n), ' ', -1)),
+           p_news_id,
+           1.0,
+           'title'
+    FROM (
+        SELECT a.N + b.N * 10 + 1 n
+        FROM (SELECT 0 AS N UNION SELECT 1 UNION SELECT 2 UNION SELECT 3 UNION SELECT 4) a,
+             (SELECT 0 AS N UNION SELECT 1) b
+        ORDER BY n
+    ) n
+    WHERE n.n <= 1 + (LENGTH(v_title) - LENGTH(REPLACE(v_title, ' ', '')))
+    AND LENGTH(SUBSTRING_INDEX(SUBSTRING_INDEX(v_title, ' ', n.n), ' ', -1)) > 2;
+
+    SET v_term_count = ROW_COUNT();
+
+    -- 记录构建日志（体现多表操作：inverted_index + index_build_logs）
+    INSERT INTO index_build_logs (news_id, term_count, build_method)
+    VALUES (p_news_id, v_term_count, 'procedure');
+
+    -- 返回结果集给Python
+    SELECT v_term_count AS indexed_terms;
+END;
+
+-- 存储过程：完整新闻入库（包含识别、分类、关联、索引）
+CREATE PROCEDURE sp_save_news_complete(
+    IN p_title VARCHAR(300),
+    IN p_content TEXT,
+    IN p_source_url VARCHAR(800),
+    IN p_source_id INT,
+    IN p_published_at DATETIME,
+    IN p_language CHAR(2),
+    IN p_hint_country CHAR(2),
+    IN p_hint_category VARCHAR(20),
+    OUT p_news_id BIGINT,
+    OUT p_status VARCHAR(100)
+)
+proc_main: BEGIN  -- 添加标签用于LEAVE
+
+
+    DECLARE v_country_code CHAR(2) DEFAULT NULL;
+    DECLARE v_category_code VARCHAR(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT 'general';
+    DECLARE v_category_id INT;
+    DECLARE v_full_text VARCHAR(1300) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_content_len INT;
+    DECLARE v_existing_id BIGINT;
+    DECLARE v_dummy INT;
+    -- 强制统一字符集和排序规则（解决collation冲突）
+    SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci;
+    -- 初始化输出参数
+    SET p_news_id = -1;
+    SET p_status = 'Initializing';
+
+    -- 步骤1：前置长度检查（替代原触发器的拦截功能）
+    SET v_content_len = CHAR_LENGTH(p_content);
+
+    IF v_content_len < 60 THEN
+        SET p_status = CONCAT('Rejected: Content too short (', v_content_len, ' chars, min 60)');
+        -- MariaDB中存储过程用LEAVE退出，不用RETURN
+        LEAVE proc_main;
+    END IF;
+
+    #步骤2：检查标题非空（数据完整性基础校验）
+    IF p_title IS NULL OR CHAR_LENGTH(TRIM(p_title)) = 0 THEN
+        SET p_status = 'Rejected: Title cannot be empty';
+        LEAVE proc_main;
+    END IF;
+
+    #步骤3：检查是否已存在（基于URL去重）
+    #修复：显式指定COLLATE避免排序规则冲突
+    SET v_existing_id = NULL;
+    SELECT news_id INTO v_existing_id
+    FROM news
+    WHERE source_url COLLATE utf8mb4_unicode_ci = p_source_url COLLATE utf8mb4_unicode_ci
+    LIMIT 1;
+
+    IF v_existing_id IS NOT NULL THEN
+        SET p_status = CONCAT('Rejected: Duplicate URL (id:', v_existing_id, ')');
+        SET p_news_id = v_existing_id; -- 返回已存在的ID供参考
+        LEAVE proc_main;
+    END IF;
+
+    #步骤4：正式插入主表（此时触发器会自动生成summary）
+    SET p_status = 'Inserting to main table';
+
+    INSERT INTO news (title, content, source_url, source_id, published_at, language, created_at)
+    VALUES (p_title, p_content, p_source_url, p_source_id, p_published_at, p_language, NOW());
+
+    SET p_news_id = LAST_INSERT_ID();
+    SET p_status = 'Main table inserted';
+
+    -- 步骤5：SQL层国家识别（基于关键词匹配）
+    SET v_full_text = CONCAT(IFNULL(p_title, ''), ' ', LEFT(IFNULL(p_content, ''), 1000));
+
+    IF v_full_text LIKE '%中国%' OR v_full_text LIKE '%北京%' OR v_full_text LIKE '%上海%'
+       OR v_full_text LIKE '%习近平%' OR v_full_text LIKE '%人民币%' THEN
+        SET v_country_code = 'CN';
+    ELSEIF v_full_text LIKE '%美国%' OR v_full_text LIKE '%华盛顿%' OR v_full_text LIKE '%纽约%'
+           OR v_full_text LIKE '%美元%' OR v_full_text LIKE '%拜登%' THEN
+        SET v_country_code = 'US';
+    ELSEIF v_full_text LIKE '%日本%' OR v_full_text LIKE '%东京%' OR v_full_text LIKE '%日元%' THEN
+        SET v_country_code = 'JP';
+    ELSEIF v_full_text LIKE '%英国%' OR v_full_text LIKE '%伦敦%' OR v_full_text LIKE '%英镑%' THEN
+        SET v_country_code = 'GB';
+    ELSEIF v_full_text LIKE '%俄罗斯%' OR v_full_text LIKE '%莫斯科%' OR v_full_text LIKE '%普京%' THEN
+        SET v_country_code = 'RU';
+    ELSEIF v_full_text LIKE '%印度%' OR v_full_text LIKE '%新德里%' THEN
+        SET v_country_code = 'IN';
+    ELSE
+        SET v_country_code = IFNULL(p_hint_country, 'US');
+    END IF;
+
+    #插入国家关联（标记为主要国家）
+    INSERT INTO news_countries (news_id, country_code, is_primary, mention_count)
+    VALUES (p_news_id, v_country_code, TRUE, 1);
+    SET p_status = CONCAT(p_status, ', Country: ', v_country_code);
+
+    #步骤6：SQL层分类识别
+    IF v_full_text LIKE '%科技%' OR v_full_text LIKE '%tech%' OR v_full_text LIKE '%AI%'
+       OR v_full_text LIKE '%人工智能%' OR v_full_text LIKE '%芯片%' OR v_full_text LIKE '%手机%' THEN
+        SET v_category_code = 'tech';
+    ELSEIF v_full_text LIKE '%政治%' OR v_full_text LIKE '%politic%' OR v_full_text LIKE '%外交%'
+           OR v_full_text LIKE '%选举%' OR v_full_text LIKE '%总统%' OR v_full_text LIKE '%议会%' THEN
+        SET v_category_code = 'politics';
+    ELSEIF v_full_text LIKE '%经济%' OR v_full_text LIKE '%economy%' OR v_full_text LIKE '%金融%'
+           OR v_full_text LIKE '%股市%' OR v_full_text LIKE '%贸易%' OR v_full_text LIKE '%GDP%' THEN
+        SET v_category_code = 'economy';
+    ELSEIF v_full_text LIKE '%军事%' OR v_full_text LIKE '%military%' OR v_full_text LIKE '%武器%'
+           OR v_full_text LIKE '%战争%' OR v_full_text LIKE '%冲突%' THEN
+        SET v_category_code = 'military';
+    ELSEIF v_full_text LIKE '%体育%' OR v_full_text LIKE '%sports%' OR v_full_text LIKE '%足球%'
+           OR v_full_text LIKE '%世界杯%' OR v_full_text LIKE '%奥运%' THEN
+        SET v_category_code = 'sports';
+    ELSEIF v_full_text LIKE '%文化%' OR v_full_text LIKE '%culture%' OR v_full_text LIKE '%电影%'
+           OR v_full_text LIKE '%艺术%' OR v_full_text LIKE '%历史%' THEN
+        SET v_category_code = 'culture';
+    ELSE
+        SET v_category_code = IFNULL(p_hint_category, 'international');
+    END IF;
+
+    #查询category_id并插入关联
+    #修复：显式指定COLLATE避免排序规则冲突
+    SELECT category_id INTO v_category_id
+    FROM categories
+    WHERE category_code COLLATE utf8mb4_unicode_ci = v_category_code COLLATE utf8mb4_unicode_ci
+    LIMIT 1;
+
+    IF v_category_id IS NOT NULL THEN
+        INSERT INTO news_categories (news_id, category_id, confidence)
+        VALUES (p_news_id, v_category_id, 1.0);
+        SET p_status = CONCAT(p_status, ', Category: ', v_category_code);
+    END IF;
+
+    #步骤7：构建倒排索引
+    CALL sp_build_index_and_log(p_news_id);
+    SET p_status = CONCAT(p_status, ', Indexed');
+
+    #步骤8：记录成功日志
+    INSERT INTO api_request_logs (source_id, request_type, request_url, fetched_count, created_at)
+    VALUES (p_source_id, 'procedure_insert', p_source_url, 1, NOW());
+
+    SET p_status = 'Success';
+
+    -- 返回结果集（方便Python读取）
+    SELECT p_news_id AS news_id, p_status AS status;
+END;
+-- ============================================================
+-- 48小时自动清理事件（替代Python的cleanup任务）
+-- ============================================================
+
+-- 创建清理存储过程（供Event调用，也可供Python手动调用）
+CREATE PROCEDURE sp_cleanup_48h()
+BEGIN
+
+    DECLARE v_deleted INT DEFAULT 0;
+    -- 强制统一字符集和排序规则
+    SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci;
+    -- 由于外键级联，只需删除news表，关联表自动清理
+    DELETE FROM news WHERE created_at < DATE_SUB(NOW(), INTERVAL 48 HOUR);
+    SET v_deleted = ROW_COUNT();
+
+    -- 清理孤立日志（超过7天的请求日志）
+    DELETE FROM api_request_logs WHERE created_at < DATE_SUB(NOW(), INTERVAL 7 DAY);
+
+    -- 返回删除数量（供检查）
+    SELECT v_deleted AS deleted_news_count;
+END;
+
+-- 创建定时事件（每30分钟执行一次，Python无需再管清理）
+-- 注意：Alwaysdata免费版可能限制Event Scheduler，如不可用则在Python保留cleanup
+CREATE EVENT evt_cleanup_news
+ON SCHEDULE EVERY 30 MINUTE
+STARTS CURRENT_TIMESTAMP
+DO
+  CALL sp_cleanup_48h();
+
+-- ============================================================
+-- I：验证与测试（保持原有测试查询）
+-- ============================================================
+
+-- 测试查询1：查看表数量（确认≥10张）
+SELECT COUNT(*) as table_count
+FROM information_schema.tables
+WHERE table_schema = DATABASE()
+AND table_type = 'BASE TABLE';
+
+-- 测试查询2：验证视图可查询
+SELECT * FROM v_news_detail LIMIT 5;
 
 -- F1. 验证表结构完整性
 SELECT
@@ -503,23 +836,57 @@ WHERE term = '中国'
 ORDER BY tf_weight DESC;
 
 
+SELECT n.title, nc.country_code, nc.is_primary, c.country_name
+FROM news n
+JOIN news_countries nc ON n.news_id = nc.news_id
+JOIN countries c ON nc.country_code = c.country_code
+ORDER BY n.created_at DESC
+LIMIT 10;
 
+SELECT c.category_name, COUNT(*) as count
+FROM news n
+JOIN news_categories nc ON n.news_id = nc.news_id
+JOIN categories c ON nc.category_id = c.category_id
+GROUP BY c.category_name
+ORDER BY count DESC;
+
+SELECT news_id, has_video FROM news ORDER BY created_at DESC LIMIT 10;
 -- 附录：清理与重置（慎用）
-
+-- 如需重新建表，按此顺序删除（先删子表，后删父表）：
 /*
+DROP EVENT IF EXISTS evt_cleanup_news
+DROP PROCEDURE IF EXISTS sp_build_index_and_log
+DROP PROCEDURE IF EXISTS sp_save_news_complete
+DROP PROCEDURE IF EXISTS sp_cleanup_48h
+-- 按依赖顺序删除（子表先删）
 DROP TABLE IF EXISTS inverted_index;
 DROP TABLE IF EXISTS media;
 DROP TABLE IF EXISTS news_categories;
 DROP TABLE IF EXISTS news_countries;
+DROP TABLE IF EXISTS api_request_logs;      -- 新增表1
+DROP TABLE IF EXISTS index_build_logs;      -- 新增表2
+DROP TABLE IF EXISTS source_stats;            -- 统计表
 DROP TABLE IF EXISTS news;
 DROP TABLE IF EXISTS categories;
 DROP TABLE IF EXISTS sources;
 DROP TABLE IF EXISTS countries;
+-- 删除视图和存储过程（如果存在）
+DROP VIEW IF EXISTS v_news_detail;
+DROP PROCEDURE IF EXISTS sp_delete_news_transaction;
+DROP PROCEDURE IF EXISTS sp_build_index_and_log;
+DROP PROCEDURE IF EXISTS sp_insert_news_with_validation;
+DROP TRIGGER IF EXISTS trg_news_before_insert;  -- 如果之前创建了一半失败
+DROP TRIGGER IF EXISTS trg_news_after_insert;   -- 如果之前创建了一半失败
 
 DELETE FROM inverted_index;
 DELETE FROM media;
 DELETE FROM news_categories;
 DELETE FROM news_countries;
-
 DELETE FROM news;
+DELETE FROM api_request_logs;      -- 新增表1
+DELETE FROM index_build_logs;      -- 新增表2
+DELETE FROM source_stats;            -- 统计表
+DELETE FROM categories;
+DELETE FROM sources;
+DELETE FROM countries;
 */

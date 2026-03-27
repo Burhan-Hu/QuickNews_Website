@@ -5,7 +5,9 @@
     "\\news_dashboard\\certs",
     "\\news_dashboard\\config",
     "\\news_dashboard\\core",
+    "\\news_dashboard\\ir",
     "\\news_dashboard\\scheduler"
   ],
+  "SelectedNode": "\\news_dashboard\\ir\\tokenizer.py",
   "PreviewInSolutionExplorer": false
 }

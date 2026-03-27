@@ -1,4 +1,4 @@
-# 新增网站爬取方法（添加到 html_fetcher.py 的 HTMLNewsFetcher 类中）
+﻿# 新增网站爬取方法（添加到 html_fetcher.py 的 HTMLNewsFetcher 类中）
 
 """
 = 使用说明 =
@@ -85,7 +85,7 @@ class HTMLNewsFetcherExtension:
                             print(f"  [Debug] 获取: {title[:30]}...")
                             content, pub_time, images, videos = self._fetch_nytimes_article(href)
                             
-                            if content and len(content) > 50:
+                            if content:
                                 articles.append({
                                     'title': title[:300],
                                     'summary': content[:500],
@@ -253,7 +253,7 @@ class HTMLNewsFetcherExtension:
                             print(f"  [Debug] 获取: {title[:30]}...")
                             content, pub_time, images, videos = self._fetch_cctv_article(href)
                             
-                            if content and len(content) > 50:
+                            if content :
                                 articles.append({
                                     'title': title[:300],
                                     'summary': content[:500],
@@ -430,7 +430,7 @@ class HTMLNewsFetcherExtension:
                             print(f"  [Debug] 获取: {title[:30]}...")
                             content, pub_time, images, videos = self._fetch_guancha_article(href)
                             
-                            if content and len(content) > 50:
+                            if content:
                                 articles.append({
                                     'title': title[:300],
                                     'summary': content[:500],
@@ -583,7 +583,7 @@ class HTMLNewsFetcherExtension:
                             print(f"  [Debug] 获取: {title[:30]}...")
                             content, pub_time, images, videos = self._fetch_washingtonpost_article(href)
                             
-                            if content and len(content) > 50:
+                            if content:
                                 articles.append({
                                     'title': title[:300],
                                     'summary': content[:500],

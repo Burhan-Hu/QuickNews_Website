@@ -9,96 +9,83 @@ class NewsScheduler:
     def __init__(self):
         self.scheduler = BackgroundScheduler()
         self.fetcher = NewsFetcher()
-        self.processor = ContentProcessor()
-        self.storage = NewsStorage()
+        self.processor = ContentProcessor()  # 精简版
+        self.storage = NewsStorage()         # 存储过程版
         
-        # 统计信息
         self.stats = {
+            'api_requests': 0, 
             'api_requests_today': 0,
+            'saved': 0, 
+            'failed': 0,
             'articles_fetched': 0,
             'articles_saved': 0
         }
     
-    def job_fetch_newsapi(self):
-        """NewsAPI定时任务：每20分钟执行一次"""
-        print(f"[Job] 开始执行NewsAPI抓取 {datetime.now()}")
+    def job_fetch_and_save(self):
+        """一键抓取+保存（所有逻辑在SQL完成）"""
+        print(f"\n[Job] 开始抓取 {datetime.now()}")
         
-        articles, status = self.fetcher.fetch_newsapi()
-        if not articles:
-            return
+        # 1. 获取数据（Python唯一职责）
+        articles = []
         
-        # 处理数据
-        processed = [self.processor.process_article(a) for a in articles]
-        processed = [a for a in processed if a is not None]  # 过滤空数据
+        # 尝试NewsAPI
+        api_articles, status = self.fetcher.fetch_newsapi()
+        if api_articles:
+            articles.extend(api_articles)
+            self.stats['api_requests'] += 1
         
-        # 入库
-        saved = self.storage.save_articles(processed)
+        # 尝试RSS
+        rss_articles = self.fetcher.fetch_all_rss()
+        if rss_articles:
+            articles.extend(rss_articles)
         
-        self.stats['api_requests_today'] += 1
-        self.stats['articles_fetched'] += len(articles)
-        self.stats['articles_saved'] += saved
+        # 尝试HTML源（ScienceDaily、俄罗斯卫星通讯社、纽约时报-中文）
+        html_articles = self.fetcher.fetch_all_html_sources()
+        if html_articles:
+            articles.extend(html_articles)
         
-        if status:
-            next_country = status.get('next_country', 'N/A')
-            next_category = status.get('next_category', 'N/A')
-            remaining = status.get('remaining', '?')
-            print(f"[Job] NewsAPI状态: 剩余{remaining}次，下次[{next_category}/{next_country}]")
-    
-    def job_fetch_rss(self):
-        """RSS定时任务：每30分钟执行一次（无限制）"""
-        print(f"[Job] 开始执行RSS抓取 {datetime.now()}")
+        # 2. 基础清洗（极度精简）
+        processed = []
+        for a in articles:
+            clean = self.processor.process_article(a)
+            if clean:
+                processed.append(clean)
         
-        articles = self.fetcher.fetch_all_rss()
-        if not articles:
-            return
+        print(f"[Job] 清洗后: {len(processed)} 条")
         
-        processed = [self.processor.process_article(a) for a in articles]
-        processed = [a for a in processed if a is not None]  # 过滤空数据
-        saved = self.storage.save_articles(processed)
-        
-        print(f"[Job] RSS保存完成: {saved}条")
-    
-    def job_cleanup(self):
-        """清理任务：每30分钟执行一次"""
-        print(f"[Job] 开始清理过期数据 {datetime.now()}")
-        self.storage.cleanup_old_news()
+        # 3. 保存（全部逻辑移交SQL存储过程：校验/去重/识别/分类/索引）
+        if processed:
+            success, failed = self.storage.save_articles(processed)
+            self.stats['saved'] += success
+            self.stats['failed'] += failed
+            print(f"[Job] SQL存储结果: 成功{success}条, 跳过{failed}条(长度/重复)")
     
     def start(self):
-        """启动调度器"""
-        # NewsAPI：每864秒（14.4分钟）一次，确保每天100次
+        # 每20分钟抓取一次（Alwaysdata免费版资源有限，不要过于频繁）
         self.scheduler.add_job(
-            self.job_fetch_newsapi,
-            IntervalTrigger(seconds=NEWSAPI_CONFIG['interval_seconds']),
-            id='newsapi_job',
+            self.job_fetch_and_save,
+            IntervalTrigger(minutes=20),
+            id='fetch_job',
             replace_existing=True
         )
         
-        # RSS：每30分钟一次
-        self.scheduler.add_job(
-            self.job_fetch_rss,
-            IntervalTrigger(minutes=30),
-            id='rss_job',
-            replace_existing=True
-        )
-        
-        # 清理：每30分钟一次
-        self.scheduler.add_job(
-            self.job_cleanup,
-            IntervalTrigger(minutes=30),
-            id='cleanup_job',
-            replace_existing=True
-        )
+        # 可选：手动清理备份（如果SQL Event未启用）
+        # self.scheduler.add_job(
+        #     lambda: self.storage.cleanup_old_news(),
+        #     IntervalTrigger(hours=1),
+        #     id='cleanup_backup'
+        # )
         
         self.scheduler.start()
-        print("[Scheduler] 调度器已启动")
-        print(f"  - NewsAPI: 每{NEWSAPI_CONFIG['interval_seconds']}秒（20分钟）")
-        print(f"  - RSS: 每30分钟")
-        print(f"  - Cleanup: 每30分钟")
+        print("[Scheduler] 启动成功（轻量Python + 重度SQL模式）")
     
     def stop(self):
+        """停止调度器"""
         self.scheduler.shutdown()
+        print("[Scheduler] 调度器已停止")
     
     def get_stats(self):
+        """获取统计信息"""
         return self.stats
 
 from datetime import datetime

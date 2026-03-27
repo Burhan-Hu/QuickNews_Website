@@ -120,7 +120,7 @@ class HTMLNewsFetcher:
                     if article_time != datetime.now():
                         pub_time = article_time
 
-                    if content and len(content) > 50:  # 至少50字才算成功
+                    if content:  # SQL存储过程会检查长度，这里不做过滤
                         articles.append({
                             'title': title[:300],
                             'summary': content[:500],  # 前500字摘要
@@ -277,7 +277,6 @@ class HTMLNewsFetcher:
 
             # 提取视频
             videos = []
-            base_url = '/'.join(url.split('/')[:3])
 
             # 1. 直接的 <video> 标签
             for video_tag in soup.find_all('video'):
@@ -287,13 +286,13 @@ class HTMLNewsFetcher:
                     if src.startswith('//'):
                         src = 'https:' + src
                     elif src.startswith('/'):
+                        base_url = '/'.join(url.split('/')[:3])
                         src = base_url + src
-                    if src and not any(v['url'] == src for v in videos):
-                        videos.append({
-                            'url': src,
-                            'type': 'direct',
-                            'platform': 'unknown'
-                        })
+                    videos.append({
+                        'url': src,
+                        'type': 'direct',
+                        'platform': 'unknown'
+                    })
 
                 # 检查 <source> 子标签
                 for source in video_tag.find_all('source'):
@@ -302,193 +301,96 @@ class HTMLNewsFetcher:
                         if src.startswith('//'):
                             src = 'https:' + src
                         elif src.startswith('/'):
+                            base_url = '/'.join(url.split('/')[:3])
                             src = base_url + src
                         # 检查是否已添加
-                        if src and not any(v['url'] == src for v in videos):
+                        if not any(v['url'] == src for v in videos):
                             videos.append({
                                 'url': src,
                                 'type': 'source',
                                 'platform': 'unknown'
                             })
 
-            # 2. iframe 嵌入视频（YouTube, Vimeo, Bilibili等）
+            # 2. iframe 嵌入视频（YouTube, Vimeo, etc.）
             for iframe in soup.find_all('iframe'):
                 src = iframe.get('src', '').strip()
                 if src:
                     if 'youtube.com' in src or 'youtu.be' in src:
-                        if not any(v['url'] == src for v in videos):
-                            videos.append({
-                                'url': src,
-                                'type': 'iframe',
-                                'platform': 'youtube'
-                            })
-                    elif 'vimeo.com' in src:
-                        if not any(v['url'] == src for v in videos):
-                            videos.append({
-                                'url': src,
-                                'type': 'iframe',
-                                'platform': 'vimeo'
-                            })
-                    elif 'bilibili.com' in src:
-                        if not any(v['url'] == src for v in videos):
-                            videos.append({
-                                'url': src,
-                                'type': 'iframe',
-                                'platform': 'bilibili'
-                            })
-                    elif 'youku.com' in src or 'tudou.com' in src or 'sohu.com' in src:
-                        if not any(v['url'] == src for v in videos):
-                            videos.append({
-                                'url': src,
-                                'type': 'iframe',
-                                'platform': self._detect_platform(src)
-                            })
-                    else:
-                        if not any(v['url'] == src for v in videos):
-                            videos.append({
-                                'url': src,
-                                'type': 'iframe',
-                                'platform': 'unknown'
-                            })
-
-            # 3. 检查 data 属性中的视频（某些网站如Xinhua等）
-            for elem in soup.find_all():
-                # 检查 data-video, data-src, data-mp4 等属性
-                for attr in ['data-video', 'data-src', 'data-mp4', 'data-url', 'data-media']:
-                    vid_src = elem.get(attr, '').strip()
-                    if vid_src:
-                        if vid_src.startswith('//'):
-                            vid_src = 'https:' + vid_src
-                        elif vid_src.startswith('/'):
-                            vid_src = base_url + vid_src
-                        if vid_src and not any(v['url'] == vid_src for v in videos):
-                            videos.append({
-                                'url': vid_src,
-                                'type': 'data_attr',
-                                'platform': 'unknown'
-                            })
-
-            # 4. 检查 <a> 标签中指向视频的链接
-            for a_tag in soup.find_all('a', href=re.compile(r'\.(mp4|webm|m3u8|flv|mkv|mov|avi|ts)(\?|#|$)', re.I)):
-                href = a_tag.get('href', '').strip()
-                if href:
-                    if href.startswith('//'):
-                        href = 'https:' + href
-                    elif href.startswith('/'):
-                        href = base_url + href
-                    if href and not any(v['url'] == href for v in videos):
                         videos.append({
-                            'url': href,
-                            'type': 'link',
+                            'url': src,
+                            'type': 'iframe',
+                            'platform': 'youtube'
+                        })
+                    elif 'vimeo.com' in src:
+                        videos.append({
+                            'url': src,
+                            'type': 'iframe',
+                            'platform': 'vimeo'
+                        })
+                    elif 'bilibili.com' in src:
+                        videos.append({
+                            'url': src,
+                            'type': 'iframe',
+                            'platform': 'bilibili'
+                        })
+                    else:
+                        videos.append({
+                            'url': src,
+                            'type': 'iframe',
                             'platform': 'unknown'
                         })
 
-            # 5. 检查常见的视频平台链接和直接视频URL
+            # 3. 检查常见的视频平台链接和直接视频URL
             video_patterns = [
                 (r'youtube\.com/watch\?v=([a-zA-Z0-9_-]+)', 'youtube'),
                 (r'youtu\.be/([a-zA-Z0-9_-]+)', 'youtube'),
                 (r'vimeo\.com/(\d+)', 'vimeo'),
                 (r'bilibili\.com/video/([a-zA-Z0-9]+)', 'bilibili'),
-                (r'youku\.com/v_show/id_([a-zA-Z0-9]+)', 'youku'),
-                (r'v\.qq\.com.*?vid=([a-zA-Z0-9]+)', 'qq_video'),
                 (r'tiktok\.com/@[^/]+/video/(\d+)', 'tiktok'),
-                # 更宽松的直接视频URL匹配，支持多个扩展名和端口
-                (r'https?://[^\s<>"{}|\\^`\[\]]*\.(?:mp4|webm|m3u8|flv|mkv|mov|avi|ts)(?:\?[^\s]*)?', 'direct_url')
+                (r'https?://[^\s<>"{}|\\^`\[\]]*\.(?:mp4|webm|m3u8|flv|mkv|mov|avi)', 'direct_url')
             ]
 
             for pattern, platform in video_patterns:
                 for match in re.finditer(pattern, response.text):
-                    try:
-                        if platform == 'youtube':
-                            video_id = match.group(1)
-                            vid_url = f'https://www.youtube.com/watch?v={video_id}'
-                            if not any(v['url'] == vid_url for v in videos):
-                                videos.append({
-                                    'url': vid_url,
-                                    'type': 'platform_link',
-                                    'platform': 'youtube',
-                                    'video_id': video_id
-                                })
-                        elif platform == 'vimeo':
-                            video_id = match.group(1)
-                            vid_url = f'https://vimeo.com/{video_id}'
-                            if not any(v['url'] == vid_url for v in videos):
-                                videos.append({
-                                    'url': vid_url,
-                                    'type': 'platform_link',
-                                    'platform': 'vimeo',
-                                    'video_id': video_id
-                                })
-                        elif platform == 'bilibili':
-                            video_id = match.group(1)
-                            vid_url = f'https://www.bilibili.com/video/{video_id}'
-                            if not any(v['url'] == vid_url for v in videos):
-                                videos.append({
-                                    'url': vid_url,
-                                    'type': 'platform_link',
-                                    'platform': 'bilibili',
-                                    'video_id': video_id
-                                })
-                        elif platform == 'youku':
-                            video_id = match.group(1)
-                            vid_url = f'https://v.youku.com/v_show/id_{video_id}.html'
-                            if not any(v['url'] == vid_url for v in videos):
-                                videos.append({
-                                    'url': vid_url,
-                                    'type': 'platform_link',
-                                    'platform': 'youku',
-                                    'video_id': video_id
-                                })
-                        elif platform == 'qq_video':
-                            video_id = match.group(1)
-                            vid_url = f'https://v.qq.com/x/page/{video_id}.html'
-                            if not any(v['url'] == vid_url for v in videos):
-                                videos.append({
-                                    'url': vid_url,
-                                    'type': 'platform_link',
-                                    'platform': 'qq_video',
-                                    'video_id': video_id
-                                })
-                        elif platform == 'direct_url':
-                            # 直接视频URL
-                            vid_url = match.group(0)
-                            if vid_url and not any(v['url'] == vid_url for v in videos):
-                                videos.append({
-                                    'url': vid_url,
-                                    'type': 'direct_url',
-                                    'platform': self._detect_platform(vid_url)
-                                })
-                    except Exception as e:
-                        # 跳过无效的视频URL
-                        continue
-
-            # 6. 检查 script 标签中的视频配置（特别是国内网站）
-            for script in soup.find_all('script'):
-                if script.string:
-                    script_text = script.string
-                    # 查找常见的视频URL模式
-                    video_url_patterns = [
-                        r'"mp4":"([^"]+)"',
-                        r"'mp4':'([^']+)'",
-                        r'"url":"([^"]+\.(?:mp4|webm|m3u8|flv|mkv|mov|avi|ts)(?:\?[^"]*)?)"',
-                        r'"videoUrl":"([^"]+)"',
-                        r'"mediaUrl":"([^"]+)"',
-                        r'"src":"([^"]+\.(?:mp4|webm|m3u8|flv|mkv|mov|avi|ts)(?:\?[^"]*)?)"',
-                    ]
-                    for pattern in video_url_patterns:
-                        for match in re.finditer(pattern, script_text):
-                            vid_url = match.group(1)
-                            if vid_url:
-                                if vid_url.startswith('//'):
-                                    vid_url = 'https:' + vid_url
-                                elif vid_url.startswith('/'):
-                                    vid_url = base_url + vid_url
-                                if vid_url and not any(v['url'] == vid_url for v in videos):
-                                    videos.append({
-                                        'url': vid_url,
-                                        'type': 'script_config',
-                                        'platform': self._detect_platform(vid_url)
-                                    })
+                    if platform == 'youtube':
+                        video_id = match.group(1)
+                        vid_url = f'https://www.youtube.com/watch?v={video_id}'
+                        if not any(v['url'] == vid_url for v in videos):
+                            videos.append({
+                                'url': vid_url,
+                                'type': 'platform_link',
+                                'platform': 'youtube',
+                                'video_id': video_id
+                            })
+                    elif platform == 'vimeo':
+                        video_id = match.group(1)
+                        vid_url = f'https://vimeo.com/{video_id}'
+                        if not any(v['url'] == vid_url for v in videos):
+                            videos.append({
+                                'url': vid_url,
+                                'type': 'platform_link',
+                                'platform': 'vimeo',
+                                'video_id': video_id
+                            })
+                    elif platform == 'bilibili':
+                        video_id = match.group(1)
+                        vid_url = f'https://www.bilibili.com/video/{video_id}'
+                        if not any(v['url'] == vid_url for v in videos):
+                            videos.append({
+                                'url': vid_url,
+                                'type': 'platform_link',
+                                'platform': 'bilibili',
+                                'video_id': video_id
+                            })
+                    elif platform == 'direct_url':
+                        # 直接视频URL
+                        vid_url = match.group(0)
+                        if not any(v['url'] == vid_url for v in videos):
+                            videos.append({
+                                'url': vid_url,
+                                'type': 'direct_url',
+                                'platform': 'unknown'
+                            })
 
             return content, pub_time, images, videos
 
@@ -548,7 +450,7 @@ class HTMLNewsFetcher:
                 try:
                     print(f"  [Debug] SCMP 获取: {link}")
                     content, pub_time, images, videos = self._fetch_article_content(link)
-                    if content and len(content) > 150:
+                    if content:
                         title = ''
                         m = re.search(r'/([^/]+)$', link)
                         if m:
@@ -600,7 +502,7 @@ class HTMLNewsFetcher:
                 try:
                     print(f"  [Debug] CNN 获取: {link}")
                     content, pub_time, images, videos = self._fetch_article_content(link)
-                    if content and len(content) > 150:
+                    if content:
                         title = ''
                         m = re.search(r'/([^/]+)\.?html?$', link)
                         if m:
@@ -632,153 +534,6 @@ class HTMLNewsFetcher:
             print(f"[HTML] ✗ CNN: {e}")
             return []
 
-    def fetch_nytimes(self):
-        """
-        纽约时报中文版爬取
-        URL: https://cn.nytimes.com/
-        支持频道：china (中国), world (国际), business (商业)
-        """
-        articles = []
-        channels = ['china', 'world', 'business']
-        
-        try:
-            for channel in channels:
-                url = f'https://cn.nytimes.com/{channel}/'
-                print(f"[HTML] 抓取: 纽约时报中文版-{channel}")
-                
-                try:
-                    response = self.session.get(url, timeout=15)
-                    response.encoding = 'utf-8'
-                    soup = BeautifulSoup(response.text, 'html.parser')
-                    
-                    article_links = soup.find_all('a', href=re.compile(r'/[a-z-]+/\d{8}/'))
-                    
-                    if not article_links:
-                        article_links = soup.select('div[class*="article"] a')
-                    
-                    processed_urls = set()
-                    
-                    for link in article_links[:80]:
-                        try:
-                            href = link.get('href', '').strip()
-                            title = link.get_text(strip=True)
-                            
-                            if not href or not title:
-                                continue
-                            
-                            if not href.startswith('http'):
-                                if href.startswith('/'):
-                                    href = 'https://cn.nytimes.com' + href
-                                elif not href.startswith('https'):
-                                    continue
-                            
-                            if href in processed_urls:
-                                continue
-                            processed_urls.add(href)
-                            
-                            if not re.search(r'/\d{8}/', href):
-                                continue
-                            
-                            print(f"  [Debug] 获取: {title[:30]}...")
-                            content, pub_time, images, videos = self._fetch_nytimes_article(href)
-                            
-                            if content and len(content) > 50:
-                                articles.append({
-                                    'title': title[:300],
-                                    'summary': content[:500],
-                                    'content': content[:15000],
-                                    'source_url': href,
-                                    'source_name': '纽约时报中文版',
-                                    'published_at': pub_time,
-                                    'image_url': images[0]['url'] if images else None,
-                                    'images': images,
-                                    'videos': videos,
-                                    'category_hint': channel,
-                                    'country_hint': 'HK',
-                                    'fetch_method': 'html_nytimes'
-                                })
-                                print(f"  [Debug] ✓ 成功")
-                            
-                            time.sleep(1.5)
-                        
-                        except Exception as e:
-                            print(f"  [Debug] 解析单条失败: {e}")
-                            continue
-                
-                except Exception as e:
-                    print(f"[HTML] ✗ 纽约时报-{channel}: {e}")
-                    continue
-                
-                time.sleep(2)
-            
-            print(f"[HTML] ✓ 纽约时报: {len(articles)} 条")
-            return articles
-        
-        except Exception as e:
-            print(f"[HTML] ✗ 纽约时报总体失败: {e}")
-            return []
-
-    def _fetch_nytimes_article(self, url):
-        """获取纽约时报文章详情页内容"""
-        try:
-            response = self.session.get(url, timeout=10)
-            response.encoding = 'utf-8'
-            soup = BeautifulSoup(response.text, 'html.parser')
-            
-            pub_time = datetime.now()
-            time_elem = soup.find('time') or soup.select_one('[data-testid*="date"]')
-            if time_elem:
-                time_str = time_elem.get_text(strip=True)
-                try:
-                    pub_time = date_parser.parse(time_str)
-                except:
-                    pass
-            
-            article_elem = soup.find('article')
-            if not article_elem:
-                article_elem = soup.select_one('div[class*="article"], div[id*="article"]')
-            
-            content = ''
-            if article_elem:
-                for tag in article_elem.find_all(['script', 'style']):
-                    tag.decompose()
-                
-                paragraphs = article_elem.find_all('p')
-                texts = []
-                for p in paragraphs:
-                    text = p.get_text(strip=True)
-                    if text and len(text) > 5:
-                        texts.append(text)
-                
-                if texts:
-                    content = '\n\n'.join(texts)
-            
-            images = []
-            for img in soup.find_all('img'):
-                src = img.get('src', '').strip()
-                if src and src.startswith('http'):
-                    alt = img.get('alt', '').strip()
-                    images.append({
-                        'url': src,
-                        'alt': alt or '',
-                        'caption': alt or ''
-                    })
-            
-            videos = []
-            for iframe in soup.find_all('iframe'):
-                src = iframe.get('src', '').strip()
-                if src:
-                    videos.append({
-                        'url': src,
-                        'type': 'iframe',
-                        'platform': 'unknown'
-                    })
-            
-            return content, pub_time, images, videos
-        
-        except Exception as e:
-            print(f"    [Error] 获取纽约时报文章失败: {e}")
-            return '', datetime.now(), [], []
 
     def fetch_cctv(self):
         """
@@ -998,7 +753,7 @@ class HTMLNewsFetcher:
                             print(f"  [Debug] 获取: {title[:30]}...")
                             content, pub_time, images, videos = self._fetch_aljazeera_article(href)
                             
-                            if content and len(content) > 100:
+                            if content:
                                 articles.append({
                                     'title': title[:300],
                                     'summary': content[:500],
@@ -1349,5 +1104,625 @@ class HTMLNewsFetcher:
 
         # 环球时报
         all_articles.extend(self.fetch_globaltimes())
+        
+        return all_articles
+    # ========== 特定网站HTML抓取（替代RSS） ==========
+    
+    def fetch_sciencedaily(self):
+        """
+        ScienceDaily HTML抓取 - 重写版
+        网址: https://www.sciencedaily.com/news/
+        """
+        url = 'https://www.sciencedaily.com/news/'
+        print(f"[HTML] 抓取: ScienceDaily")
+        
+        try:
+            response = self.session.get(url, timeout=15, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            })
+            response.raise_for_status()
+            response.encoding = 'utf-8'
+            
+            soup = BeautifulSoup(response.text, 'lxml')
+            
+            articles = []
+            # 尝试多种选择器找新闻列表
+            news_links = []
+            
+            # 方法1: 查找所有指向 /releases/ 的链接（ScienceDaily文章URL模式）
+            for a in soup.find_all('a', href=re.compile(r'/releases/\d{4}/\d{2}/')):
+                title = a.get_text(strip=True)
+                if title and len(title) > 10:
+                    news_links.append((title, a.get('href', '')))
+            
+            # 方法2: 查找 h2/h3 下的链接
+            if not news_links:
+                for a in soup.select('h2 a, h3 a, .headline a, .title a'):
+                    title = a.get_text(strip=True)
+                    href = a.get('href', '')
+                    if title and len(title) > 10 and '/releases/' in href:
+                        news_links.append((title, href))
+            
+            # 去重
+            seen = set()
+            unique_links = []
+            for title, href in news_links[:20]:
+                if href not in seen:
+                    seen.add(href)
+                    unique_links.append((title, href))
+            
+            print(f"  [Debug] 找到 {len(unique_links)} 条新闻链接")
+            
+            for title, href in unique_links:
+                try:
+                    if not href.startswith('http'):
+                        link = 'https://www.sciencedaily.com' + href
+                    else:
+                        link = href
+                    
+                    print(f"  [ScienceDaily] 获取: {title[:50]}...")
+                    
+                    # 抓取详情页
+                    article_resp = self.session.get(link, timeout=10, headers={
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                    })
+                    article_resp.encoding = 'utf-8'
+                    article_soup = BeautifulSoup(article_resp.text, 'lxml')
+                    
+                    # 提取时间
+                    pub_time = datetime.now()
+                    # ScienceDaily时间格式: March 24, 2026
+                    date_elem = article_soup.find('dt', string='Date:')
+                    if date_elem:
+                        date_text = date_elem.find_next('dd').get_text(strip=True) if date_elem.find_next('dd') else ''
+                        if date_text:
+                            try:
+                                pub_time = date_parser.parse(date_text)
+                            except:
+                                pass
+                    
+                    # 提取正文 - 多种选择器尝试
+                    content = ''
+                    selectors = ['#text', '#story_content', '.lead', '[itemprop="articleBody"]', '.article-content']
+                    for sel in selectors:
+                        content_elem = article_soup.select_one(sel)
+                        if content_elem:
+                            for tag in content_elem.find_all(['script', 'style', 'aside']):
+                                tag.decompose()
+                            paragraphs = content_elem.find_all('p')
+                            texts = [p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True)]
+                            content = '\n\n'.join(texts)
+                            if len(content) > 200:
+                                break
+                    
+                    # 提取图片
+                    images = []
+                    for img in article_soup.select('#text img, .lead img, [itemprop="articleBody"] img'):
+                        src = img.get('src', '')
+                        if src and not src.endswith('.gif'):
+                            if src.startswith('/'):
+                                src = 'https://www.sciencedaily.com' + src
+                            images.append({'url': src, 'alt': img.get('alt', ''), 'caption': img.get('alt', '')})
+                    
+                    if content and len(content) > 200:
+                        articles.append({
+                            'title': title[:300],
+                            'content': content[:20000],
+                            'source_url': link,
+                            'source_name': 'ScienceDaily',
+                            'published_at': pub_time,
+                            'image_url': images[0]['url'] if images else None,
+                            'images': images,
+                            'category_hint': 'science',
+                            'country_hint': 'US',
+                            'fetch_method': 'html_sciencedaily'
+                        })
+                        print(f"    ✓ {len(content)} 字, {len(images)} 图")
+                    else:
+                        print(f"    ✗ 内容太短: {len(content)} 字")
+                    
+                    time.sleep(1)
+                    
+                except Exception as e:
+                    print(f"    ✗ 失败: {str(e)[:40]}")
+                    continue
+            
+            print(f"[HTML] ✓ ScienceDaily: {len(articles)} 条")
+            return articles
+            
+        except Exception as e:
+            print(f"[HTML] ✗ ScienceDaily: {str(e)[:50]}")
+            return []
+    def _fetch_sputnik_article(self, url):
+        """获取俄罗斯卫星通讯社文章详情页 - 根据实际HTML结构调整"""
+        try:
+            response = self.session.get(url, timeout=10, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            })
+            response.encoding = 'utf-8'
+            soup = BeautifulSoup(response.text, 'lxml')
+            
+            # 提取时间
+            pub_time = datetime.now()
+            time_elem = soup.find('time') or soup.select_one('[datetime]')
+            if time_elem and time_elem.get('datetime'):
+                try:
+                    pub_time = date_parser.parse(time_elem['datetime'])
+                except:
+                    pass
+            
+            # ===== 关键修复：根据提供的HTML结构提取正文 =====
+            content = ''
+            
+            # 方法1: 查找article__body容器，提取所有文本块（包括普通文本和引用）
+            article_body = soup.select_one('.article__body')
+            if article_body:
+                # 查找所有文本块: .article__text (普通文本) 和 .article__quote-text (引用)
+                text_blocks = article_body.select('.article__text, .article__quote-text')
+                if text_blocks:
+                    texts = []
+                    for block in text_blocks:
+                        text = block.get_text(strip=True)
+                        # 过滤空文本和过短文本
+                        if text and len(text) > 3:
+                            texts.append(text)
+                    # 用双换行分隔，保持段落结构
+                    content = '\n\n'.join(texts)
+                    print(f"    [Debug] 从article__body提取到 {len(texts)} 个文本块")
+            
+            # 方法2: 如果方法1失败，尝试直接查找所有article__text（兼容旧结构）
+            if not content or len(content) < 100:
+                text_blocks = soup.select('.article__text')
+                if text_blocks:
+                    texts = [block.get_text(strip=True) for block in text_blocks if block.get_text(strip=True)]
+                    content = '\n\n'.join(texts)
+            
+            # 方法3: 兜底方案 - 使用通用选择器
+            if not content or len(content) < 100:
+                selectors = [
+                    '.b-article__text',
+                    '[itemprop="articleBody"]',
+                    '.article-body',
+                    'article'
+                ]
+                for sel in selectors:
+                    content_elem = soup.select_one(sel)
+                    if content_elem:
+                        for tag in content_elem.find_all(['script', 'style', 'nav', 'aside']):
+                            tag.decompose()
+                        paragraphs = content_elem.find_all(['p', 'div'])
+                        texts = [p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True)]
+                        if texts:
+                            content = '\n\n'.join(texts)
+                            break
+            
+            # ===== 提取图片 - 根据HTML中的img标签结构 =====
+            images = []
+            # 文章图片通常在.article__body内的img标签，或在article__block[data-type="article"]
+            for img in soup.select('.article__body img, .article__image img, .b-article__text img'):
+                src = img.get('src', '').strip()
+                if not src:
+                    continue
+                
+                # 处理协议相对URL和相对路径
+                if src.startswith('//'):
+                    src = 'https:' + src
+                elif src.startswith('/'):
+                    src = 'https://sputniknews.cn' + src
+                
+                alt = img.get('alt', '').strip()
+                title = img.get('title', '').strip()
+                
+                # 过滤掉图标、logo、小图片
+                if any(x in src.lower() for x in ['icon', 'logo', 'avatar', 'button', 'svg', 'share', 'more']):
+                    continue
+                
+                # 过滤重复URL（srcset中的不同尺寸）
+                if not any(i['url'] == src for i in images):
+                    images.append({
+                        'url': src,
+                        'alt': alt,
+                        'caption': title or alt
+                    })
+            
+            # ===== 提取视频 =====
+            videos = []
+            # 查找iframe嵌入视频
+            for iframe in soup.find_all('iframe'):
+                src = iframe.get('src', '').strip()
+                if src:
+                    videos.append({
+                        'url': src,
+                        'type': 'iframe',
+                        'platform': 'unknown'
+                    })
+            
+            # 查找video标签
+            for video in soup.find_all('video'):
+                src = video.get('src', '').strip()
+                if src:
+                    videos.append({
+                        'url': src,
+                        'type': 'video',
+                        'platform': 'sputnik'
+                    })
+                # 检查source子标签
+                for source in video.find_all('source'):
+                    src = source.get('src', '').strip()
+                    if src and not any(v['url'] == src for v in videos):
+                        videos.append({
+                            'url': src,
+                            'type': 'source',
+                            'platform': 'sputnik'
+                        })
+            
+            return content, pub_time, images, videos
+            
+        except Exception as e:
+            print(f"    [Error] 获取俄罗斯卫星通讯社文章失败: {str(e)[:100]}")
+            return '', datetime.now(), [], []
+            
+    def fetch_sputnik(self):
+        """
+        俄罗斯卫星通讯社 HTML抓取 - 整合版
+        网址: https://sputniknews.cn/
+        正文结构: .article__body 内包含多个 .article__text 和 .article__quote-text
+        """
+        urls = [
+            'https://sputniknews.cn/politics/',
+            'https://sputniknews.cn/world/',
+            'https://sputniknews.cn/economy/',
+        ]
+        
+        all_articles = []
+        session = requests.Session()
+        session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        })
+        
+        for url in urls:
+            try:
+                print(f"[HTML] 抓取: 俄罗斯卫星通讯社 - {url.split('/')[-2]}")
+                
+                response = session.get(url, timeout=15)
+                response.raise_for_status()
+                response.encoding = 'utf-8'
+                
+                soup = BeautifulSoup(response.text, 'lxml')
+                
+                # 查找文章链接 - 俄罗斯卫星通讯社中文版的URL模式
+                news_links = []
+                for a in soup.find_all('a', href=re.compile(r'/\d{8}/')):
+                    title = a.get_text(strip=True)
+                    href = a.get('href', '')
+                    if title and len(title) > 10:
+                        if href.startswith('/'):
+                            href = 'https://sputniknews.cn' + href
+                        elif not href.startswith('http'):
+                            continue
+                        news_links.append((title, href))
+                
+                # 去重
+                seen = set()
+                unique_links = []
+                for title, href in news_links[:10]:
+                    if href not in seen:
+                        seen.add(href)
+                        unique_links.append((title, href))
+                
+                print(f"  [Debug] {url.split('/')[-2]} 栏目找到 {len(unique_links)} 条")
+                
+                articles = []
+                
+                for title, href in unique_links:
+                    try:
+                        print(f"  [Sputnik] 获取: {title[:50]}...")
+                        
+                        # ===== 内嵌详情页抓取逻辑 =====
+                        article_resp = session.get(href, timeout=10)
+                        article_resp.encoding = 'utf-8'
+                        article_soup = BeautifulSoup(article_resp.text, 'lxml')
+                        
+                        # 提取时间
+                        pub_time = datetime.now()
+                        # 优先从meta标签提取（如用户提供的格式）
+                        time_meta = article_soup.find('meta', attrs={'timestamp': True})
+                        if time_meta:
+                            time_str = time_meta.get('timestamp')
+                            try:
+                                pub_time = datetime.strptime(time_str, '%Y-%m-%d %H:%M')
+                            except:
+                                pass
+                        
+                        # 如果没从meta获取到，尝试time标签
+                        if pub_time == datetime.now():
+                            time_elem = article_soup.find('time') or article_soup.select_one('[datetime]')
+                            if time_elem and time_elem.get('datetime'):
+                                try:
+                                    pub_time = date_parser.parse(time_elem['datetime'])
+                                except:
+                                    pass
+                        
+                        # 提取正文 - 根据用户提供的HTML结构
+                        content = ''
+                        
+                        # 方法1: 查找article__body容器，提取所有文本块
+                        article_body = article_soup.select_one('.article__body')
+                        if article_body:
+                            # 提取所有文本块: .article__text (普通文本) 和 .article__quote-text (引用)
+                            text_blocks = article_body.select('.article__text, .article__quote-text')
+                            if text_blocks:
+                                texts = []
+                                for block in text_blocks:
+                                    text = block.get_text(strip=True)
+                                    if text and len(text) > 3:
+                                        texts.append(text)
+                                content = '\n\n'.join(texts)
+                        
+                        # 方法2: 如果方法1失败，尝试直接查找所有article__text
+                        if not content or len(content) < 100:
+                            text_blocks = article_soup.select('.article__text')
+                            if text_blocks:
+                                texts = [block.get_text(strip=True) for block in text_blocks if block.get_text(strip=True)]
+                                content = '\n\n'.join(texts)
+                        
+                        # 方法3: 兜底方案
+                        if not content or len(content) < 100:
+                            selectors = ['.b-article__text', '[itemprop="articleBody"]', 'article']
+                            for sel in selectors:
+                                content_elem = article_soup.select_one(sel)
+                                if content_elem:
+                                    for tag in content_elem.find_all(['script', 'style', 'nav', 'aside']):
+                                        tag.decompose()
+                                    paragraphs = content_elem.find_all('p')
+                                    texts = [p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True)]
+                                    if texts:
+                                        content = '\n\n'.join(texts)
+                                        break
+                        
+                        # 提取图片
+                        images = []
+                        # 从article__body内查找所有img（排除分享按钮等小图标）
+                        for img in article_soup.select('.article__body img, .b-article__text img'):
+                            src = img.get('src', '').strip()
+                            if not src:
+                                continue
+                            
+                            # 处理URL
+                            if src.startswith('//'):
+                                src = 'https:' + src
+                            elif src.startswith('/'):
+                                src = 'https://sputniknews.cn' + src
+                            
+                            # 过滤掉图标和按钮图片
+                            if any(x in src.lower() for x in ['icon', 'logo', 'avatar', 'button', 'share', 'more', 'svg']):
+                                continue
+                            
+                            alt = img.get('alt', '').strip()
+                            title = img.get('title', '').strip()
+                            
+                            # 避免重复
+                            if not any(i['url'] == src for i in images):
+                                images.append({
+                                    'url': src,
+                                    'alt': alt,
+                                    'caption': title or alt
+                                })
+                        
+                        # 提取视频
+                        videos = []
+                        # 查找iframe嵌入
+                        for iframe in article_soup.find_all('iframe'):
+                            src = iframe.get('src', '').strip()
+                            if src:
+                                videos.append({'url': src, 'type': 'iframe', 'platform': 'unknown'})
+                        
+                        # 查找video标签
+                        for video in article_soup.find_all('video'):
+                            src = video.get('src', '').strip()
+                            if src:
+                                videos.append({'url': src, 'type': 'video', 'platform': 'sputnik'})
+                            for source in video.find_all('source'):
+                                src = source.get('src', '').strip()
+                                if src and not any(v['url'] == src for v in videos):
+                                    videos.append({'url': src, 'type': 'source', 'platform': 'sputnik'})
+                        
+                        # 保存数据
+                        if content:
+                            articles.append({
+                                'title': title[:300],
+                                'content': content[:20000],
+                                'source_url': href,
+                                'source_name': '俄罗斯卫星通讯社',
+                                'published_at': pub_time,
+                                'image_url': images[0]['url'] if images else None,
+                                'images': images,
+                                'videos': videos,
+                                'category_hint': 'international',
+                                'country_hint': 'RU',
+                                'fetch_method': 'html_sputnik'
+                            })
+                            print(f"    ✓ 获取成功 ({len(content)}字, {len(images)}图, {len(videos)}视频)")
+                        else:
+                            print(f"    ✗ 内容为空")
+                        
+                        time.sleep(1)
+                        
+                    except Exception as e:
+                        print(f"    ✗ 失败: {str(e)[:50]}")
+                        continue
+                
+                all_articles.extend(articles)
+                time.sleep(1)
+                
+            except Exception as e:
+                print(f"[HTML] ✗ 俄罗斯卫星通讯社 {url}: {str(e)[:50]}")
+                continue
+        
+        print(f"[HTML] ✓ 俄罗斯卫星通讯社: 共 {len(all_articles)} 条")
+        return all_articles
+
+    def fetch_nytimes_cn(self):
+        """
+        纽约时报-中文 HTML抓取 - 修正版
+        网址: https://cn.nytimes.com/
+        正文结构: .article-paragraph (根据你提供的HTML片段)
+        """
+        urls = [
+            'https://cn.nytimes.com/china/',
+            'https://cn.nytimes.com/world/',
+            'https://cn.nytimes.com/business/',
+            'https://cn.nytimes.com/technology/',
+        ]
+        
+        all_articles = []
+        
+        for url in urls:
+            try:
+                print(f"[HTML] 抓取: 纽约时报-中文 - {url.split('/')[-2]}")
+                
+                response = self.session.get(url, timeout=15, headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                })
+                response.raise_for_status()
+                response.encoding = 'utf-8'
+                
+                soup = BeautifulSoup(response.text, 'lxml')
+                
+                articles = []
+                news_links = []
+                
+                # 查找文章链接 - 纽约时报中文版的URL模式: /category/YYYYMMDD/article-title/
+                for a in soup.find_all('a', href=re.compile(r'/[a-z]+/\d{8}/[a-z0-9\-]+/$')):
+                    title = a.get_text(strip=True)
+                    href = a.get('href', '')
+                    if title and len(title) > 10:
+                        if href.startswith('/'):
+                            href = 'https://cn.nytimes.com' + href
+                        elif not href.startswith('https'):
+                            continue
+                        news_links.append((title, href))
+                
+                # 去重
+                seen = set()
+                unique_links = []
+                for title, href in news_links[:8]:
+                    if href not in seen and not any(x in href for x in ['/slideshow/', '/video/', '/author/']):
+                        seen.add(href)
+                        unique_links.append((title, href))
+                
+                print(f"  [Debug] {url.split('/')[-2]} 栏目找到 {len(unique_links)} 条")
+                
+                for title, href in unique_links:
+                    try:
+                        print(f"  [NYTimes-CN] 获取: {title[:50]}...")
+                        
+                        article_resp = self.session.get(href, timeout=10, headers={
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                        })
+                        article_resp.encoding = 'utf-8'
+                        article_soup = BeautifulSoup(article_resp.text, 'lxml')
+                        
+                        # 提取时间
+                        pub_time = datetime.now()
+                        time_elem = article_soup.find('time') or article_soup.select_one('[datetime]')
+                        if time_elem and time_elem.get('datetime'):
+                            try:
+                                pub_time = date_parser.parse(time_elem['datetime'])
+                            except:
+                                pass
+                        
+                        # 提取正文 - 根据你提供的HTML结构使用 .article-paragraph
+                        content = ''
+                        
+                        # 方法1: 使用你提供的 .article-paragraph 类
+                        paragraphs = article_soup.select('.article-paragraph')
+                        if paragraphs:
+                            texts = [p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True)]
+                            content = '\n\n'.join(texts)
+                        
+                        # 方法2: 如果方法1失败，尝试其他常见选择器（兜底）
+                        if not content:
+                            selectors = [
+                                '.article-body-item',      # 外层容器
+                                '.article-content',
+                                '[itemprop="articleBody"]',
+                                'article'
+                            ]
+                            for sel in selectors:
+                                content_elem = article_soup.select_one(sel)
+                                if content_elem:
+                                    for tag in content_elem.find_all(['script', 'style', 'aside', '.byline', '.author-bio']):
+                                        tag.decompose()
+                                    texts = [p.get_text(strip=True) for p in content_elem.find_all(['p', 'div']) if p.get_text(strip=True)]
+                                    content = '\n\n'.join(texts)
+                                    if content:
+                                        break
+                        
+                        # 提取图片
+                        images = []
+                        for img in article_soup.select('.article-paragraph img, .article-body-item img, figure img'):
+                            src = img.get('src', '')
+                            if src and not any(x in src.lower() for x in ['icon', 'logo', 'author']):
+                                if src.startswith('/'):
+                                    src = 'https://cn.nytimes.com' + src
+                                images.append({
+                                    'url': src, 
+                                    'alt': img.get('alt', ''), 
+                                    'caption': img.get('alt', '')
+                                })
+                        
+                        # 只检查非空，长度交给SQL存储过程判断
+                        if content:
+                            articles.append({
+                                'title': title[:300],
+                                'content': content[:20000],  # 仅截断，不判断长度
+                                'source_url': href,
+                                'source_name': '纽约时报-中文',
+                                'published_at': pub_time,
+                                'image_url': images[0]['url'] if images else None,
+                                'images': images,
+                                'category_hint': 'international',
+                                'country_hint': 'US',
+                                'fetch_method': 'html_nytimes_cn'
+                            })
+                            print(f"    ✓ 获取成功 ({len(content)}字)")
+                        else:
+                            print(f"    ✗ 内容为空")
+                        
+                        time.sleep(1.5)
+                        
+                    except Exception as e:
+                        print(f"    ✗ 失败: {str(e)[:40]}")
+                        continue
+                
+                all_articles.extend(articles)
+                time.sleep(1)
+                
+            except Exception as e:
+                print(f"[HTML] ✗ 纽约时报-中文 {url}: {str(e)[:50]}")
+                continue
+        
+        print(f"[HTML] ✓ 纽约时报-中文: 共 {len(all_articles)} 条")
+        return all_articles
+
+    def fetch_all_html_sources(self):
+        """抓取所有HTML源（包括国内和国际）"""
+        all_articles = []
+        
+        # 国内源
+        all_articles.extend(self.fetch_xinhua() or [])
+        all_articles.extend(self.fetch_scmp() or [])
+        all_articles.extend(self.fetch_cnn() or [])
+        all_articles.extend(self.fetch_cctv() or [])
+        all_articles.extend(self.fetch_aljazeera() or [])
+        all_articles.extend(self.fetch_globaltimes() or [])
+        
+        # 国际源（替代RSS）
+        all_articles.extend(self.fetch_sciencedaily() or [])
+        time.sleep(1)
+        all_articles.extend(self.fetch_sputnik() or [])
+        time.sleep(1)
+        all_articles.extend(self.fetch_nytimes_cn() or [])
         
         return all_articles
