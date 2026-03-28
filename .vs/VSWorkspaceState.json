@@ -8,6 +8,6 @@
     "\\news_dashboard\\ir",
     "\\news_dashboard\\scheduler"
   ],
-  "SelectedNode": "\\news_dashboard\\ir\\tokenizer.py",
+  "SelectedNode": "\\news_dashboard\\ir\\xml_api.py",
   "PreviewInSolutionExplorer": false
 }

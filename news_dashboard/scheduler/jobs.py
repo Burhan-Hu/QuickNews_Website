@@ -1,5 +1,8 @@
 ﻿from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from datetime import datetime
+import json
+from sqlalchemy import text
 from core.fetcher import NewsFetcher
 from core.processor import ContentProcessor
 from core.storage import NewsStorage
@@ -9,59 +12,106 @@ class NewsScheduler:
     def __init__(self):
         self.scheduler = BackgroundScheduler()
         self.fetcher = NewsFetcher()
-        self.processor = ContentProcessor()  # 精简版
-        self.storage = NewsStorage()         # 存储过程版
+        self.processor = ContentProcessor()
+        self.storage = NewsStorage()
         
+        # 【修正】兼容main.py的stats字段命名
         self.stats = {
-            'api_requests': 0, 
-            'api_requests_today': 0,
-            'saved': 0, 
-            'failed': 0,
-            'articles_fetched': 0,
-            'articles_saved': 0
+            'api_requests_today': 0,  # 对应原api_requests
+            'articles_fetched': 0,    # 总获取数
+            'articles_saved': 0,      # 对应原saved
+            'failed': 0,              # 保存失败数
+            'indexed': 0              # XML索引数
         }
     
     def job_fetch_and_save(self):
-        """一键抓取+保存（所有逻辑在SQL完成）"""
-        print(f"\n[Job] 开始抓取 {datetime.now()}")
+        """抓取+保存+XML索引（完整流程）"""
+        print(f"\n[Job] 开始抓取 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         
-        # 1. 获取数据（Python唯一职责）
+        # 1. 抓取数据
         articles = []
         
-        # 尝试NewsAPI
+        # NewsAPI
         api_articles, status = self.fetcher.fetch_newsapi()
         if api_articles:
             articles.extend(api_articles)
-            self.stats['api_requests'] += 1
+            self.stats['api_requests_today'] += 1
         
-        # 尝试RSS
+        # RSS源
         rss_articles = self.fetcher.fetch_all_rss()
         if rss_articles:
             articles.extend(rss_articles)
         
-        # 尝试HTML源（ScienceDaily、俄罗斯卫星通讯社、纽约时报-中文）
+        # HTML源
         html_articles = self.fetcher.fetch_all_html_sources()
         if html_articles:
             articles.extend(html_articles)
         
-        # 2. 基础清洗（极度精简）
+        print(f"[Job] 原始抓取: {len(articles)} 条")
+        self.stats['articles_fetched'] += len(articles)
+        
+        # 2. 处理（分词+清洗）
         processed = []
         for a in articles:
-            clean = self.processor.process_article(a)
-            if clean:
-                processed.append(clean)
+            try:
+                clean = self.processor.process_article(a)
+                if clean and clean.get('term_count', 0) > 0:
+                    processed.append(clean)
+            except Exception as e:
+                print(f"[Processor] 处理失败: {e}")
+                continue
         
-        print(f"[Job] 清洗后: {len(processed)} 条")
+        print(f"[Job] 清洗分词后: {len(processed)} 条（含索引数据）")
         
-        # 3. 保存（全部逻辑移交SQL存储过程：校验/去重/识别/分类/索引）
+        # 3. 存储（自动构建XML索引）
         if processed:
             success, failed = self.storage.save_articles(processed)
-            self.stats['saved'] += success
+            self.stats['articles_saved'] += success
             self.stats['failed'] += failed
-            print(f"[Job] SQL存储结果: 成功{success}条, 跳过{failed}条(长度/重复)")
+            self.stats['indexed'] += success  # 成功保存的都已建立XML索引
+            print(f"[Job] 结果: 成功{success}条, 跳过{failed}条")
+    
+    def job_rebuild_missing_index(self):
+        """补充构建漏掉的索引"""
+        try:
+            unindexed = self.storage.get_unindexed_news(hours=6)
+            if not unindexed:
+                return
+            
+            print(f"[IndexBuilder] 发现 {len(unindexed)} 条未索引新闻")
+            
+            for news_id, title, summary, lang in unindexed:
+                try:
+                    # 重新分词
+                    if lang == 'zh':
+                        title_terms = self.processor.tokenize_chinese(title)
+                        content_terms = self.processor.tokenize_chinese(summary or title)
+                    else:
+                        title_terms = self.processor.tokenize_english(title)
+                        content_terms = self.processor.tokenize_english(summary or title)
+                    
+                    # 调用存储过程补建索引
+                    conn = self.storage.engine.connect()
+                    conn.execute(
+                        text("CALL sp_build_xml_index(:id, :tt, :ct, :lang)"),
+                        {
+                            'id': news_id,
+                            'tt': json.dumps(title_terms),
+                            'ct': json.dumps(content_terms),
+                            'lang': lang
+                        }
+                    )
+                    conn.commit()
+                    conn.close()
+                    self.stats['indexed'] += 1
+                    
+                except Exception as e:
+                    print(f"[IndexBuilder] 补建索引失败 {news_id}: {e}")
+        except Exception as e:
+            print(f"[IndexBuilder] 检查失败: {e}")
     
     def start(self):
-        # 每20分钟抓取一次（Alwaysdata免费版资源有限，不要过于频繁）
+        # 主任务：每20分钟抓取并索引
         self.scheduler.add_job(
             self.job_fetch_and_save,
             IntervalTrigger(minutes=20),
@@ -69,23 +119,28 @@ class NewsScheduler:
             replace_existing=True
         )
         
-        # 可选：手动清理备份（如果SQL Event未启用）
-        # self.scheduler.add_job(
-        #     lambda: self.storage.cleanup_old_news(),
-        #     IntervalTrigger(hours=1),
-        #     id='cleanup_backup'
-        # )
+        # 索引补充任务：每30分钟检查一次
+        self.scheduler.add_job(
+            self.job_rebuild_missing_index,
+            IntervalTrigger(minutes=30),
+            id='index_job',
+            replace_existing=True
+        )
+        
+        # 清理任务：每小时执行一次
+        self.scheduler.add_job(
+            self.storage.cleanup_old_news,
+            IntervalTrigger(hours=1),
+            id='cleanup_job',
+            replace_existing=True
+        )
         
         self.scheduler.start()
-        print("[Scheduler] 启动成功（轻量Python + 重度SQL模式）")
+        print("[Scheduler] 启动成功（XML检索增强版）")
     
     def stop(self):
-        """停止调度器"""
         self.scheduler.shutdown()
-        print("[Scheduler] 调度器已停止")
+        print("[Scheduler] 已停止")
     
     def get_stats(self):
-        """获取统计信息"""
         return self.stats
-
-from datetime import datetime
