@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Diagram>
+  <ID>DATABASE</ID>
+  <OriginalElement>237e6c82-2dcf-43ef-acf0-30746e7aa172.SCHEMA:quicknews_maindb</OriginalElement>
+  <nodes>
+    <node x="214.5" y="1372.0">237e6c82-2dcf-43ef-acf0-30746e7aa172.TABLE:quicknews_maindb.inverted_index</node>
+    <node x="-350.5" y="869.6542372881356">237e6c82-2dcf-43ef-acf0-30746e7aa172.TABLE:quicknews_maindb.categories</node>
+    <node x="557.5" y="1080.0">237e6c82-2dcf-43ef-acf0-30746e7aa172.TABLE:quicknews_maindb.media</node>
+    <node x="804.0" y="1408.0">237e6c82-2dcf-43ef-acf0-30746e7aa172.TABLE:quicknews_maindb.news_countries</node>
+    <node x="-238.0" y="1420.0">237e6c82-2dcf-43ef-acf0-30746e7aa172.TABLE:quicknews_maindb.news_categories</node>
+    <node x="907.4999999999999" y="816.0">237e6c82-2dcf-43ef-acf0-30746e7aa172.TABLE:quicknews_maindb.countries</node>
+    <node x="17.5" y="1176.0">237e6c82-2dcf-43ef-acf0-30746e7aa172.TABLE:quicknews_maindb.index_build_logs</node>
+    <node x="-229.5" y="371.9343728813559">237e6c82-2dcf-43ef-acf0-30746e7aa172.TABLE:quicknews_maindb.api_request_logs</node>
+    <node x="175.09884745762713" y="172.44908474576272">237e6c82-2dcf-43ef-acf0-30746e7aa172.TABLE:quicknews_maindb.source_stats</node>
+    <node x="-235.0" y="-176.0">237e6c82-2dcf-43ef-acf0-30746e7aa172.TABLE:quicknews_maindb.sources</node>
+    <node x="1418.3011525423726" y="123.78569491525425">237e6c82-2dcf-43ef-acf0-30746e7aa172.VIEW:quicknews_maindb.v_news_detail</node>
+    <node x="359.5" y="432.0">237e6c82-2dcf-43ef-acf0-30746e7aa172.TABLE:quicknews_maindb.news</node>
+  </nodes>
+  <notes />
+  <edges>
+    <edge source="237e6c82-2dcf-43ef-acf0-30746e7aa172.TABLE:quicknews_maindb.news_categories" target="237e6c82-2dcf-43ef-acf0-30746e7aa172.TABLE:quicknews_maindb.news" relationship="REFERENCES">
+      <point x="75.0" y="-68.0" />
+      <point x="-13.0" y="1048.0" />
+      <point x="572.0" y="1048.0" />
+      <point x="0.0" y="176.0" />
+    </edge>
+    <edge source="237e6c82-2dcf-43ef-acf0-30746e7aa172.TABLE:quicknews_maindb.news_countries" target="237e6c82-2dcf-43ef-acf0-30746e7aa172.TABLE:quicknews_maindb.countries" relationship="REFERENCES">
+      <point x="94.0" y="-80.0" />
+      <point x="0.0" y="92.0" />
+    </edge>
+    <edge source="237e6c82-2dcf-43ef-acf0-30746e7aa172.TABLE:quicknews_maindb.media" target="237e6c82-2dcf-43ef-acf0-30746e7aa172.TABLE:quicknews_maindb.news" relationship="REFERENCES">
+      <point x="0.0" y="-128.0" />
+      <point x="712.0" y="1048.0" />
+      <point x="572.0" y="1048.0" />
+      <point x="0.0" y="176.0" />
+    </edge>
+    <edge source="237e6c82-2dcf-43ef-acf0-30746e7aa172.TABLE:quicknews_maindb.api_request_logs" target="237e6c82-2dcf-43ef-acf0-30746e7aa172.TABLE:quicknews_maindb.sources" relationship="REFERENCES">
+      <point x="0.0" y="-116.0" />
+      <point x="0.0" y="104.0" />
+    </edge>
+    <edge source="237e6c82-2dcf-43ef-acf0-30746e7aa172.TABLE:quicknews_maindb.index_build_logs" target="237e6c82-2dcf-43ef-acf0-30746e7aa172.TABLE:quicknews_maindb.news" relationship="REFERENCES">
+      <point x="0.0" y="-80.0" />
+      <point x="192.0" y="1048.0" />
+      <point x="572.0" y="1048.0" />
+      <point x="0.0" y="176.0" />
+    </edge>
+    <edge source="237e6c82-2dcf-43ef-acf0-30746e7aa172.TABLE:quicknews_maindb.news_categories" target="237e6c82-2dcf-43ef-acf0-30746e7aa172.TABLE:quicknews_maindb.categories" relationship="REFERENCES">
+      <point x="-75.0" y="-68.0" />
+      <point x="0.0" y="80.0" />
+    </edge>
+    <edge source="237e6c82-2dcf-43ef-acf0-30746e7aa172.TABLE:quicknews_maindb.inverted_index" target="237e6c82-2dcf-43ef-acf0-30746e7aa172.TABLE:quicknews_maindb.news" relationship="REFERENCES">
+      <point x="0.0" y="-116.0" />
+      <point x="452.0" y="1048.0" />
+      <point x="572.0" y="1048.0" />
+      <point x="0.0" y="176.0" />
+    </edge>
+    <edge source="237e6c82-2dcf-43ef-acf0-30746e7aa172.TABLE:quicknews_maindb.news_countries" target="237e6c82-2dcf-43ef-acf0-30746e7aa172.TABLE:quicknews_maindb.news" relationship="REFERENCES">
+      <point x="-94.0" y="-80.0" />
+      <point x="898.0" y="1048.0" />
+      <point x="572.0" y="1048.0" />
+      <point x="0.0" y="176.0" />
+    </edge>
+    <edge source="237e6c82-2dcf-43ef-acf0-30746e7aa172.TABLE:quicknews_maindb.source_stats" target="237e6c82-2dcf-43ef-acf0-30746e7aa172.TABLE:quicknews_maindb.sources" relationship="REFERENCES">
+      <point x="0.0" y="-80.0" />
+      <point x="373.09884745762713" y="128.0" />
+      <point x="-68.0" y="128.0" />
+      <point x="0.0" y="104.0" />
+    </edge>
+  </edges>
+  <settings layout="分层紧凑" zoom="1.125335693359375" showDependencies="false" x="248.07379416949203" y="10.929599999999994" />
+  <SelectedNodes />
+  <Categories>
+    <Category>列</Category>
+    <Category>注释</Category>
+    <Category>虚拟外键</Category>
+    <Category>键列</Category>
+  </Categories>
+</Diagram>
+

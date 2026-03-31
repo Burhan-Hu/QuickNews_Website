@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS sources (
     reliability_score TINYINT COMMENT '可信度评分1-10',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (source_id),
-    UNIQUE KEY uk_source_url (source_url),
+    UNIQUE KEY uk_source_name (source_name),
     CONSTRAINT chk_reliability CHECK (reliability_score BETWEEN 1 AND 10)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 COMMENT='新闻来源管理';
@@ -478,18 +478,40 @@ INSERT INTO categories (category_name, category_code, color_code, sort_order) VA
 ('社会', 'society', '#34495e', 7),  -- 深灰
 ('国际', 'international', '#e67e22', 8); -- 橙红（综合）
 
--- E3. 插入示例新闻来源（RSS源）
+-- E3. 插入实际使用的新闻来源（与爬取代码一致）
+-- NewsAPI来源（固定source为NewsAPI，不提供具体网址）
 INSERT INTO sources (source_name, source_url, source_type, language, reliability_score) VALUES
-('Reuters - World News', 'http://feeds.reuters.com/reuters/worldNews', 'rss', 'en', 9),
-('BBC News - World', 'http://feeds.bbci.co.uk/news/world/rss.xml', 'rss', 'en', 9),
-('Associated Press', 'https://apnews.com/hub/world-news', 'crawler', 'en', 9),
-('Reuters - China', 'http://feeds.reuters.com/reuters/chinaNews', 'rss', 'en', 8),
-('财新网', 'http://www.caixin.com/rss.xml', 'rss', 'zh', 8),
-('澎湃新闻', 'https://www.thepaper.cn/rss.xml', 'rss', 'zh', 7),
-('界面新闻', 'https://www.jiemian.com/rss.xml', 'rss', 'zh', 7),
+('NewsAPI', NULL, 'api', 'en', 8);
+
+-- RSS来源
+INSERT INTO sources (source_name, source_url, source_type, language, reliability_score) VALUES
 ('36氪', 'https://36kr.com/feed', 'rss', 'zh', 6),
-('TechCrunch', 'https://techcrunch.com/feed/', 'rss', 'en', 7),
-('The Verge', 'https://www.theverge.com/rss/index.xml', 'rss', 'en', 7);
+('虎嗅网', 'https://rss.aishort.top/?type=huxiu', 'rss', 'zh', 6),
+('RT-中文', 'https://www.rt.com/rss/news/', 'rss', 'zh', 7),
+('FoxNews-World', 'http://feeds.foxnews.com/foxnews/world', 'rss', 'en', 7),
+('南华早报-SCMP', 'https://feedx.net/rss/scmp.xml', 'rss', 'en', 7),
+('FoxNews-Politics', 'http://feeds.foxnews.com/foxnews/politics', 'rss', 'en', 7),
+('ChinaDaily', 'https://feedx.net/rss/chinadaily.xml', 'rss', 'en', 7),
+('NewYorker', 'https://feedx.net/rss/newyorker.xml', 'rss', 'en', 8),
+('凤凰网-军事', 'https://feedx.net/rss/ifengmil.xml', 'rss', 'zh', 6),
+('AP-美联社', 'https://feedx.net/rss/ap.xml', 'rss', 'en', 9),
+('经济日报', 'https://feedx.net/rss/jingjiribao.xml', 'rss', 'zh', 7);
+
+-- HTML爬取来源
+INSERT INTO sources (source_name, source_url, source_type, language, reliability_score) VALUES
+('新华网-时政', 'http://www.xinhuanet.com/politics/', 'crawler', 'zh', 9),
+('CNN', 'https://edition.cnn.com/world', 'crawler', 'en', 8),
+('界面新闻', 'https://www.jiemian.com/lists/4.html', 'crawler', 'zh', 7),
+('Al Jazeera', 'https://www.aljazeera.com/', 'crawler', 'en', 8),
+('环球时报', 'https://www.globaltimes.cn/', 'crawler', 'zh', 7),
+('ScienceDaily', 'https://www.sciencedaily.com/news/', 'crawler', 'en', 8),
+('俄罗斯卫星通讯社', 'https://sputniknews.cn/', 'crawler', 'zh', 7),
+('纽约时报-中文', 'https://cn.nytimes.com/', 'crawler', 'zh', 8),
+('央视网-新闻', 'https://news.cctv.com/', 'crawler', 'zh', 9),
+('央视网-视频', 'https://v.cctv.com/', 'crawler', 'zh', 9),
+('观察者网', 'https://www.guancha.cn/', 'crawler', 'zh', 7),
+('华盛顿邮报', 'https://www.washingtonpost.com/', 'crawler', 'en', 8),
+('纽约时报中文版', 'https://cn.nytimes.com/', 'crawler', 'zh', 8);
 
 -- ============================================================
 -- F：视图（支撑"含有视图的查询"作业）
@@ -556,15 +578,18 @@ AFTER INSERT ON news
 FOR EACH ROW
 BEGIN
     SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci;
-    INSERT INTO source_stats (source_id, total_news, today_news, last_publish_time)
-    VALUES (NEW.source_id, 1, 1, NEW.created_at)
-    ON DUPLICATE KEY UPDATE
-        total_news = total_news + 1,
-        today_news = CASE
-            WHEN DATE(last_publish_time) = DATE(NEW.created_at) THEN today_news + 1
-            ELSE 1
-        END,
-        last_publish_time = NEW.created_at;
+    -- 只有当 source_id 不为 NULL 时才更新统计
+    IF NEW.source_id IS NOT NULL THEN
+        INSERT INTO source_stats (source_id, total_news, today_news, last_publish_time)
+        VALUES (NEW.source_id, 1, 1, NEW.created_at)
+        ON DUPLICATE KEY UPDATE
+            total_news = total_news + 1,
+            today_news = CASE
+                WHEN DATE(last_publish_time) = DATE(NEW.created_at) THEN today_news + 1
+                ELSE 1
+            END,
+            last_publish_time = NEW.created_at;
+    END IF;
 END //
 
 DELIMITER ;

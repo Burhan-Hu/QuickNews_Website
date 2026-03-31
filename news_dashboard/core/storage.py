@@ -1,4 +1,4 @@
-﻿from sqlalchemy import text
+from sqlalchemy import text
 from config.db_config import engine
 from datetime import datetime
 import json

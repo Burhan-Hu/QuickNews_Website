@@ -24,33 +24,14 @@ class NewsScheduler:
             'indexed': 0              # XML索引数
         }
     
-    def job_fetch_and_save(self):
-        """抓取+保存+XML索引（完整流程）"""
-        print(f"\n[Job] 开始抓取 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    def _process_and_save(self, articles, source_name):
+        """处理并保存文章（流式处理，防止内存累积）"""
+        if not articles:
+            return 0, 0
         
-        # 1. 抓取数据
-        articles = []
+        print(f"[Job] {source_name}: 开始处理 {len(articles)} 条...")
         
-        # NewsAPI
-        api_articles, status = self.fetcher.fetch_newsapi()
-        if api_articles:
-            articles.extend(api_articles)
-            self.stats['api_requests_today'] += 1
-        
-        # RSS源
-        rss_articles = self.fetcher.fetch_all_rss()
-        if rss_articles:
-            articles.extend(rss_articles)
-        
-        # HTML源
-        html_articles = self.fetcher.fetch_all_html_sources()
-        if html_articles:
-            articles.extend(html_articles)
-        
-        print(f"[Job] 原始抓取: {len(articles)} 条")
-        self.stats['articles_fetched'] += len(articles)
-        
-        # 2. 处理（分词+清洗）
+        # 处理
         processed = []
         for a in articles:
             try:
@@ -61,15 +42,76 @@ class NewsScheduler:
                 print(f"[Processor] 处理失败: {e}")
                 continue
         
-        print(f"[Job] 清洗分词后: {len(processed)} 条（含索引数据）")
-        
-        # 3. 存储（自动构建XML索引）
+        # 保存
         if processed:
+            print(f"[Job] {source_name}: 开始保存 {len(processed)} 条到数据库...")
             success, failed = self.storage.save_articles(processed)
-            self.stats['articles_saved'] += success
-            self.stats['failed'] += failed
-            self.stats['indexed'] += success  # 成功保存的都已建立XML索引
-            print(f"[Job] 结果: 成功{success}条, 跳过{failed}条")
+            print(f"[Job] {source_name}: 完成 (保存{success}条, 跳过{failed}条)")
+            return success, failed
+        else:
+            print(f"[Job] {source_name}: 无有效文章可保存")
+        return 0, 0
+    
+    def job_fetch_and_save(self):
+        """抓取+保存+XML索引（流式处理，防止内存累积）"""
+        print(f"\n[Job] 开始抓取 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        total_fetched = 0
+        total_saved = 0
+        total_failed = 0
+        
+        # 1. NewsAPI
+        api_articles, status = self.fetcher.fetch_newsapi()
+        if api_articles:
+            self.stats['api_requests_today'] += 1
+            total_fetched += len(api_articles)
+            s, f = self._process_and_save(api_articles, "NewsAPI")
+            total_saved += s
+            total_failed += f
+            del api_articles  # 释放内存
+        
+        # 2. RSS源
+        rss_articles = self.fetcher.fetch_all_rss()
+        if rss_articles:
+            total_fetched += len(rss_articles)
+            s, f = self._process_and_save(rss_articles, "RSS")
+            total_saved += s
+            total_failed += f
+            del rss_articles  # 释放内存
+        
+        # 3. HTML源（逐个抓取并保存，防止内存累积）
+        html_fetcher = self.fetcher.html_fetcher
+        html_sources = [
+            ("界面新闻", html_fetcher.fetch_jiemian),
+            ("新华网", html_fetcher.fetch_xinhua),
+            ("CNN", html_fetcher.fetch_cnn),
+            ("环球时报", html_fetcher.fetch_globaltimes),
+            ("ScienceDaily", html_fetcher.fetch_sciencedaily),
+            ("Sputnik", html_fetcher.fetch_sputnik),
+            ("纽约时报", html_fetcher.fetch_nytimes_cn),
+            ("半岛电视台", html_fetcher.fetch_aljazeera),
+        ]
+        
+        for source_name, fetch_func in html_sources:
+            try:
+                articles = fetch_func()
+                if articles:
+                    total_fetched += len(articles)
+                    s, f = self._process_and_save(articles, source_name)
+                    total_saved += s
+                    total_failed += f
+                    del articles  # 立即释放内存
+            except Exception as e:
+                print(f"[Job] {source_name} 抓取失败: {e}")
+                continue
+        
+        # 更新统计
+        self.stats['articles_fetched'] += total_fetched
+        self.stats['articles_saved'] += total_saved
+        self.stats['failed'] += total_failed
+        self.stats['indexed'] += total_saved
+        
+        print(f"[Job] 总计: 抓取{total_fetched}条, 保存{total_saved}条, 跳过{total_failed}条")
     
     def job_rebuild_missing_index(self):
         """补充构建漏掉的索引"""

@@ -529,59 +529,6 @@ class HTMLNewsFetcher:
                     return links
         return links
 
-    def fetch_scmp(self):
-        """南华早报SCMP中国新闻抓取"""
-        url = 'https://www.scmp.com/news/china'
-        print(f"[HTML] 抓取: SCMP-China")
-        try:
-            response = self.session.get(url, timeout=20)
-            response.encoding = 'utf-8'
-            soup = BeautifulSoup(response.text, 'lxml')
-
-            candidate = self._gather_article_links(
-                soup,
-                selectors=['.story-card__heading a', '.river-item__text a', 'a[href*="/article/"]'],
-                base_url='https://www.scmp.com',
-                href_regex=r'https?://www\.scmp\.com/.+',
-                limit=80
-            )
-
-            articles = []
-            for link in candidate:
-                try:
-                    print(f"  [Debug] SCMP 获取: {link}")
-                    content, pub_time, images, videos = self._fetch_article_content(link)
-                    if content:
-                        title = ''
-                        m = re.search(r'/([^/]+)$', link)
-                        if m:
-                            title = m.group(1).replace('-', ' ')
-                        articles.append({
-                            'title': title[:300] or 'SCMP',
-                            'summary': content[:500],
-                            'content': content[:15000],
-                            'source_url': link,
-                            'source_name': 'SCMP',
-                            'published_at': pub_time,
-                            'image_url': images[0]['url'] if images else None,
-                            'images': images,
-                            'videos': videos,
-                            'category_hint': 'international',
-                            'country_hint': 'HK',
-                            'fetch_method': 'html_scmp'
-                        })
-                        print(f"  [Debug] SCMP ✓ 成功: {link} ({len(images)}图)")
-                    else:
-                        print(f"  [Debug] SCMP ✗ 内容太短: {link}")
-                except Exception as e:
-                    print(f"  [Debug] SCMP 失败: {e}")
-                    continue
-
-            print(f"[HTML] ✓ SCMP-China: {len(articles)} 条")
-            return articles
-        except Exception as e:
-            print(f"[HTML] ✗ SCMP: {e}")
-            return []
 
     def fetch_cnn(self):
         """CNN世界新闻抓取 - 修复版：区分视频页/文章页，过滤无用图片"""
@@ -663,100 +610,12 @@ class HTMLNewsFetcher:
             # 判断页面类型
             is_video_page = '/video/' in url or bool(soup.find('div', {'data-component-name': 'video-resource'}))
         
-            if is_video_page:
-                return self._fetch_cnn_video_page(soup, url)
-            else:
+            if not is_video_page:
                 return self._fetch_cnn_article_page(soup, url)
             
         except Exception as e:
             print(f"    [Error] CNN详情页失败: {e}")
             return '', datetime.now(), [], []
-
-    def _fetch_cnn_video_page(self, soup, url):
-        """CNN视频页解析：提取视频信息、缩略图和简短描述"""
-        content = ''
-        images = []
-        videos = []
-        pub_time = datetime.now()
-    
-        # 查找视频资源组件
-        video_resource = soup.find('div', {'data-component-name': 'video-resource'})
-        if not video_resource:
-            video_resource = soup.find('div', {'class': 'video-resource'})
-    
-        if video_resource:
-            # 提取标题（data-headline）
-            title = video_resource.get('data-headline', '').strip()
-        
-            # 提取描述（HTML解码）
-            import html
-            desc_html = video_resource.get('data-description', '')
-            if desc_html:
-                # 去除HTML标签，保留纯文本
-                desc_soup = BeautifulSoup(html.unescape(desc_html), 'lxml')
-                content = desc_soup.get_text(strip=True)
-        
-            # 提取时间
-            pub_date = video_resource.get('data-publish-date', '')
-            if pub_date:
-                try:
-                    pub_time = datetime.strptime(pub_date[:19], '%Y-%m-%dT%H:%M:%S')
-                except:
-                    pass
-        
-            # 提取缩略图（优先使用 poster-image-override，其次是 fave-thumbnails）
-            poster_data = video_resource.get('data-poster-image-override', '')
-            if poster_data:
-                try:
-                    import json
-                    poster_json = json.loads(poster_data.replace('&quot;', '"'))
-                    if 'big' in poster_json and 'uri' in poster_json['big']:
-                        img_url = poster_json['big']['uri']
-                        if 'media.cnn.com' in img_url:
-                            images.append({
-                                'url': img_url,
-                                'alt': title,
-                                'caption': title
-                            })
-                except:
-                    pass
-        
-            # 如果没找到，尝试 fave-thumbnails
-            if not images:
-                thumbs_data = video_resource.get('data-fave-thumbnails', '')
-                if thumbs_data:
-                    try:
-                        thumbs_data = thumbs_data.replace('&quot;', '"')
-                        import json
-                        thumbs_json = json.loads(thumbs_data)
-                        if 'big' in thumbs_json and 'uri' in thumbs_json['big']:
-                            img_url = thumbs_json['big']['uri']
-                            if 'media.cnn.com' in img_url:
-                                images.append({
-                                    'url': img_url,
-                                    'alt': title,
-                                    'caption': title
-                                })
-                    except:
-                        pass
-        
-            # 标记为视频类型
-            if content:
-                videos.append({
-                    'url': url,  # 页面URL即视频页URL
-                    'type': 'video_page',
-                    'platform': 'cnn',
-                    'title': title
-                })
-    
-        # 如果上面没找到内容，尝试备用方案：查找video-player组件中的poster
-        if not content:
-            video_player = soup.find('div', {'data-component-name': 'video-player'})
-            if video_player:
-                # 尝试从video-player提取
-                pass  # 逻辑已在上面覆盖大部分情况
-    
-        return content, pub_time, images, videos
 
     def _fetch_cnn_article_page(self, soup, url):
         """CNN文章页解析：提取正文、严格过滤内容图片"""
@@ -861,311 +720,169 @@ class HTMLNewsFetcher:
     
         return content, pub_time, images, videos
 
-    def fetch_cctv_news(self):
+    def fetch_jiemian(self):
         """
-        央视新闻HTML抓取 - 使用Playwright处理JavaScript动态加载
+        界面新闻HTML抓取 - 使用requests直接抓取（无需浏览器）
+        URL: https://www.jiemian.com/lists/4.html
+        注意：界面新闻是服务端渲染，可直接用requests
         """
-        url = 'https://ysxw.cctv.cn/24hours.html'
-        print(f"[HTML] 抓取: 央视新闻-24小时")
+        url = 'https://www.jiemian.com/lists/4.html'
+        print("[HTML] 抓取: 界面新闻")
         
         try:
-            from playwright.sync_api import sync_playwright
-            
             articles = []
             
-            with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True)
-                context = browser.new_context(
-                    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                )
-                page = context.new_page()
-                
-                print("  [Debug] 正在加载页面...")
-                page.goto(url, wait_until='networkidle', timeout=30000)
-                time.sleep(3)  # 等待JS渲染
-                
-                rendered_html = page.content()
-                soup = BeautifulSoup(rendered_html, 'lxml')
-                
-                # 提取新闻链接
-                print(f"  [Debug] 页面HTML长度: {len(rendered_html)} 字符")
-                links = self._extract_cctv_links(soup)
-                print(f"  [Debug] 找到 {len(links)} 个新闻链接")
-                
-                # 去重处理
-                seen_urls = set()
-                unique_links = []
-                for title, href in links:
-                    href = html.unescape(href)
-                    href = re.sub(r'&t=\d+', '', href)
-                    if not href.startswith('http'):
-                        href = 'https://ysxw.cctv.cn' + href
-                    
-                    if href not in seen_urls:
-                        seen_urls.add(href)
-                        unique_links.append((title, href))
-                
-                print(f"  [Debug] 去重后: {len(unique_links)} 个")
-                
-                # 抓取详情页
-                for title, href in unique_links[:15]:
-                    try:
-                        content, pub_time, images, videos = self._fetch_cctv_page(page, href, title)
-                        
-                        if content and len(content) > 50:
-                            articles.append({
-                                'title': title[:300],
-                                'summary': content[:500],
-                                'content': content[:15000],
-                                'source_url': href,
-                                'source_name': '央视新闻',
-                                'published_at': pub_time,
-                                'image_url': images[0]['url'] if images else None,
-                                'images': images,
-                                'videos': videos,
-                                'category_hint': 'news',
-                                'country_hint': 'CN',
-                                'fetch_method': 'playwright_cctv'
-                            })
-                            video_info = f", {len(videos)}视频" if videos else ", 无视频"
-                            print(f"    ✓ {title[:30]}... ({len(content)}字, {len(images)}图{video_info})")
-                        else:
-                            print(f"    ✗ 内容太短: {title[:30]}...")
-                        
-                        time.sleep(0.5)
-                    except Exception as e:
-                        print(f"    ✗ 失败: {str(e)[:50]}")
-                        continue
-                
-                browser.close()
+            # 获取列表页
+            response = self.session.get(url, timeout=15)
+            response.encoding = 'utf-8'
+            soup = BeautifulSoup(response.text, 'lxml')
             
-            print(f"[HTML] ✓ 央视新闻: {len(articles)} 条")
+            # 提取新闻链接 - 界面新闻使用 /article/ 格式
+            links = soup.find_all('a', href=re.compile(r'/article/\d+'))
+            print(f"  [Debug] 找到 {len(links)} 个链接")
+            
+            # 去重处理
+            seen_urls = set()
+            unique_links = []
+            for a in links:
+                href = a['href']
+                if not href.startswith('http'):
+                    href = 'https://www.jiemian.com' + href
+                
+                title = a.get_text(strip=True)
+                if title and len(title) > 5 and href not in seen_urls:
+                    seen_urls.add(href)
+                    unique_links.append((title, href))
+            
+            print(f"  [Debug] 去重后: {len(unique_links)} 个")
+            
+            # 抓取详情页
+            for title, href in unique_links[:15]:
+                try:
+                    content, pub_time, images, videos = self._fetch_jiemian_article(href)
+                    
+                    if content and len(content) > 30:
+                        articles.append({
+                            'title': title[:300],
+                            'summary': content[:500],
+                            'content': content[:15000],
+                            'source_url': href,
+                            'source_name': '界面新闻',
+                            'published_at': pub_time,
+                            'image_url': images[0]['url'] if images else None,
+                            'images': images,
+                            'videos': videos,
+                            'category_hint': 'finance',
+                            'country_hint': 'CN',
+                            'fetch_method': 'requests_jiemian'
+                        })
+                        video_info = f", {len(videos)}视频" if videos else ", 无视频"
+                        print(f"    [OK] {title[:30]}... ({len(content)}字, {len(images)}图{video_info})")
+                    else:
+                        print(f"    [SKIP] 内容太短: {title[:30]}...")
+                    
+                    time.sleep(0.3)
+                except Exception as e:
+                    print(f"    [ERR] 失败: {str(e)[:50]}")
+                    continue
+            
+            print(f"[HTML] [OK] 界面新闻: {len(articles)} 条")
             return articles
             
-        except ImportError:
-            print("[HTML] ✗ 请先安装Playwright: pip install playwright")
-            print("            然后运行: playwright install chromium")
-            return []
         except Exception as e:
-            print(f"[HTML] ✗ 央视新闻: {e}")
+            print(f"[HTML] [ERR] 界面新闻: {e}")
             return []
     
-    def _extract_cctv_links(self, soup):
-        """提取央视新闻链接"""
-        links = []
+    def _fetch_jiemian_article(self, url):
+        """
+        抓取界面新闻详情页
+        """
+        resp = self.session.get(url, timeout=10)
+        resp.encoding = 'utf-8'
+        soup = BeautifulSoup(resp.text, 'lxml')
         
-        # 策略1: 通过 item_id 查找
-        all_a = soup.find_all('a', href=True)
-        print(f"    [LinkDebug] 页面总链接数: {len(all_a)}")
-        
-        for a in all_a:
-            href = a.get('href', '')
-            if 'item_id=' in href:
-                title = a.get_text(strip=True)
-                if title and len(title) > 3:
-                    links.append((title, href))
-        
-        print(f"    [LinkDebug] item_id链接: {len(links)} 个")
-        
-        if links:
-            return links
-        
-        # 策略2: 卡片类名
-        for pattern in ['card', 'item', 'news']:
-            cards = soup.find_all('a', class_=re.compile(pattern, re.I))
-            print(f"    [LinkDebug] 类名'{pattern}'匹配: {len(cards)} 个")
-            for card in cards:
-                href = card.get('href', '')
-                title = card.get_text(strip=True)
-                if title and len(title) > 3 and href:
-                    links.append((title, href))
-            if links:
-                break
-        
-        return links
-    
-    def _fetch_cctv_page(self, page, url, list_title=''):
-        """使用Playwright抓取详情页 - 修复视频抓取（深度提取M3U8）"""
-        page.goto(url, wait_until='networkidle', timeout=15000)
-        time.sleep(3)  # 增加等待时间，确保视频加载
-        
-        html_content = page.content()
-        soup = BeautifulSoup(html_content, 'lxml')
-        
-        # 标题
-        title = list_title
-        h1 = soup.find('h1')
-        if h1:
-            page_title = h1.get_text(strip=True)
-            if page_title and len(page_title) > 5:
-                title = page_title
+        # 标题 - 优先从页面获取
+        h1 = soup.find('h1', class_='article-title') or soup.find('h1')
+        title = h1.get_text(strip=True) if h1 else ''
         
         # 时间
         pub_time = datetime.now()
-        time_elem = soup.find('span', class_='time') or soup.select_one('[class*="time"]')
+        time_elem = soup.find('span', class_='article-time') or soup.find('time')
         if time_elem:
             time_text = time_elem.get_text(strip=True)
-            match = re.search(r'(\d{4}[-/]\d{2}[-/]\d{2}[\s:]\d{2}:\d{2})', time_text)
-            if match:
+            try:
+                # 界面新闻时间格式: 2025-03-30 18:30
+                pub_time = datetime.strptime(time_text, '%Y-%m-%d %H:%M')
+            except:
                 try:
-                    time_str = match.group(1).replace('/', '-')
-                    pub_time = datetime.strptime(time_str, '%Y-%m-%d %H:%M')
+                    pub_time = date_parser.parse(time_text)
                 except:
                     pass
         
-        # 正文
+        # 正文内容
         content = ''
-        content_div = soup.find('div', class_='article-content')
+        content_div = soup.find('div', class_='article-content') or soup.find('article')
+        
         if content_div:
+            # 清理script和style
             for tag in content_div.find_all(['script', 'style', 'iframe']):
                 tag.decompose()
             
+            # 提取段落
             texts = []
             for p in content_div.find_all('p'):
                 text = p.get_text(strip=True)
-                if text and len(text) > 5:
-                    if not any(x in text for x in ['版权所有', '©']):
-                        texts.append(text)
+                if text and len(text) > 3:
+                    texts.append(text)
             content = '\n\n'.join(texts)
         
-        # 图片
+        # 提取图片 - 界面新闻图片可能有懒加载(data-src)
         images = []
         if content_div:
             for img in content_div.find_all('img'):
-                src = img.get('src', '') or img.get('data-src', '')
-                if src and not src.endswith('.gif'):
-                    images.append({'url': src, 'alt': title, 'caption': title})
+                src = img.get('data-src') or img.get('src')
+                if src and not src.startswith('data:'):
+                    # 补全URL
+                    if src.startswith('//'):
+                        src = 'https:' + src
+                    elif src.startswith('/'):
+                        src = 'https://www.jiemian.com' + src
+                    images.append({
+                        'url': src,
+                        'alt': img.get('alt', title),
+                        'caption': img.get('alt', title)
+                    })
         
-        # 视频 - 深度提取M3U8源
+        # 提取视频
         videos = []
-        cover_url = ''
-        
-        print(f"    [VideoDebug] 开始提取视频...")
-        
-        # 策略1: 查找.prism-cover获取封面图（阿里云播放器）
-        prism_cover = soup.find('div', class_='prism-cover')
-        if prism_cover:
-            style = prism_cover.get('style', '')
-            cover_match = re.search(r'url\(["\']?([^"\')]+)', style)
-            if cover_match:
-                cover_url = cover_match.group(1).replace('&quot;', '').strip()
-                print(f"    [VideoDebug] 找到封面图: {cover_url[:60]}...")
-        
-        # 检查是否有视频播放器
-        has_player = bool(soup.find('div', class_='prism-player') or 
-                         soup.find('div', class_='video-player-wrap') or
-                         soup.find('video'))
-        print(f"    [VideoDebug] 检测到视频播放器: {has_player}")
-        
-        # 策略2: 从所有script标签中深度提取视频配置
-        all_scripts = ''
-        for script in soup.find_all('script'):
-            if script.string:
-                all_scripts += script.string + '\n'
-        
-        # 查找M3U8链接（多种模式）
-        video_sources = []
-        
-        # 模式1: 直接匹配M3U8 URL
-        m3u8_patterns = [
-            r'(https?://[^\s"\'\]\>\,]+\.m3u8[^\s"\'\]\>\,]*)',
-            r'(https?://[^\s"\'\]\>\,]+\/index\.m3u8)',
-            r'["\'](https?://[^"\']+\.m3u8)["\']',
-        ]
-        for pattern in m3u8_patterns:
-            matches = re.findall(pattern, all_scripts)
-            for m in matches:
-                if m and m not in video_sources:
-                    video_sources.append(m)
-        
-        if video_sources:
-            print(f"    [VideoDebug] 从脚本中找到 {len(video_sources)} 个M3U8源")
-            for i, vs in enumerate(video_sources[:2]):
-                print(f"      - 源{i+1}: {vs[:70]}...")
-        
-        # 模式2: 查找视频配置对象（JSON格式）
-        config_patterns = [
-            r'video[\s]*[:=][\s]*["\']([^"\']+)["\']',
-            r'src[\s]*[:=][\s]*["\']([^"\']*\.m3u8[^"\']*)["\']',
-            r'url[\s]*[:=][\s]*["\']([^"\']*\.m3u8[^"\']*)["\']',
-            r'playUrl[\s]*[:=][\s]*["\']([^"\']+)["\']',
-            r'videoUrl[\s]*[:=][\s]*["\']([^"\']+)["\']',
-        ]
-        for pattern in config_patterns:
-            matches = re.findall(pattern, all_scripts)
-            for m in matches:
-                if m and '.m3u8' in m and m not in video_sources:
-                    video_sources.append(m)
-                    print(f"    [VideoDebug] 从配置中找到源: {m[:60]}...")
-        
-        # 模式3: 尝试用Playwright执行JS获取视频源
-        js_video_found = False
-        try:
-            video_info = page.evaluate('''() => {
-                const videos = document.querySelectorAll('video');
-                const result = [];
-                videos.forEach(v => {
-                    result.push({
-                        src: v.src,
-                        currentSrc: v.currentSrc,
-                        poster: v.poster
-                    });
-                });
-                if (window.player && window.player.getCurrentQuality) {
-                    result.push({playerSrc: 'player-exists'});
-                }
-                if (window.videoInfo) {
-                    result.push({videoInfo: window.videoInfo});
-                }
-                return result;
-            }''')
+        if content_div:
+            # 查找video标签
+            for video in content_div.find_all('video'):
+                src = video.get('src')
+                if src:
+                    videos.append({'url': src, 'type': 'mp4'})
             
-            print(f"    [VideoDebug] JS找到 {len(video_info)} 个video元素")
+            # 查找iframe视频（腾讯视频、优酷等）
+            for iframe in content_div.find_all('iframe'):
+                src = iframe.get('src')
+                if src and ('video' in src or 'player' in src):
+                    videos.append({
+                        'url': src,
+                        'type': 'iframe',
+                        'platform': 'external'
+                    })
             
-            for info in video_info:
-                if info.get('currentSrc'):
-                    print(f"    [VideoDebug] video.currentSrc: {info['currentSrc'][:60]}...")
-                    if '.m3u8' in info['currentSrc'] and info['currentSrc'] not in video_sources:
-                        video_sources.append(info['currentSrc'])
-                        js_video_found = True
-                if info.get('src') and info['src'] not in video_sources:
-                    print(f"    [VideoDebug] video.src: {info['src'][:60]}...")
-                    if '.m3u8' in info['src']:
-                        video_sources.append(info['src'])
-                        js_video_found = True
-                if info.get('poster') and not cover_url:
-                    cover_url = info['poster']
-        except Exception as e:
-            print(f"    [VideoDebug] JS执行失败: {e}")
-        
-        # 构建视频列表
-        if video_sources:
-            for vs in video_sources[:3]:
-                videos.append({
-                    'url': vs,
-                    'type': 'm3u8',
-                    'platform': 'cctv',
-                    'poster': cover_url
-                })
-        
-        # 如果没有任何视频源但有播放器，添加占位
-        if not videos:
-            if has_player:
-                videos.append({
-                    'url': url,  # 使用文章URL作为视频页链接
-                    'type': 'video_page',
-                    'platform': 'cctv',
-                    'poster': cover_url,
-                    'note': '视频需通过原页面播放'
-                })
-                print(f"    [VideoDebug] 未提取到视频源，但检测到播放器，添加占位")
-            else:
-                print(f"    [VideoDebug] 未检测到视频")
-        else:
-            print(f"    [VideoDebug] 最终提取到 {len(videos)} 个视频")
+            # 从script中查找视频链接
+            scripts = content_div.find_all('script')
+            for script in scripts:
+                if script.string:
+                    # 查找mp4或m3u8链接
+                    video_urls = re.findall(r'https?://[^\s"\'<>]+\.(?:mp4|m3u8)', script.string)
+                    for vurl in video_urls:
+                        if vurl not in [v['url'] for v in videos]:
+                            videos.append({'url': vurl, 'type': 'video'})
         
         return content, pub_time, images, videos
-
 
     def fetch_aljazeera(self):
         """
@@ -1966,36 +1683,13 @@ class HTMLNewsFetcher:
         print(f"[HTML] ✓ 纽约时报-中文: 共 {len(all_articles)} 条")
         return all_articles
 
-    def fetch_all_domestic(self):
-        """抓取所有国内外源"""
-        all_articles = []
-        
-        # 新华网
-        all_articles.extend(self.fetch_xinhua())
-
-        # 南华早报
-        all_articles.extend(self.fetch_scmp())
-        # 央视新闻
-        all_articles.extend(self.fetch_cctv_news() or [])
-        # CNN
-        all_articles.extend(self.fetch_cnn())
-
-        # Al Jazeera
-        all_articles.extend(self.fetch_aljazeera())
-
-        # 环球时报
-        all_articles.extend(self.fetch_globaltimes())
-        
-        return all_articles
     
     def fetch_all_html_sources(self):
         """抓取所有HTML源（包括国内和国际）"""
         all_articles = []
-        
         # 国内源
-        all_articles.extend(self.fetch_cctv_news() or [])
+        all_articles.extend(self.fetch_jiemian() or [])
         all_articles.extend(self.fetch_xinhua() or [])
-        all_articles.extend(self.fetch_scmp() or [])
         all_articles.extend(self.fetch_cnn() or [])
         all_articles.extend(self.fetch_globaltimes() or [])
         

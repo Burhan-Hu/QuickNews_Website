@@ -37,6 +37,9 @@ class NewsFetcher:
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
+        # 初始化HTML抓取器，供流式处理使用
+        from core.html_fetcher import HTMLNewsFetcher
+        self.html_fetcher = HTMLNewsFetcher()
     
     def _fetch_full_page_content(self, url):
         """从源URL抓取详情页全文（仅清洗HTML，不做长度判断）"""
@@ -128,10 +131,9 @@ class NewsFetcher:
                             content_text = full_content
                             print(f"    ✓ 抓取成功: {len(content_text)} 字")
                         else:
-                            # 抓取失败，使用API返回的内容
-                            content_text = strip_tags(raw_content) if raw_content else ''
-                            if content_text:
-                                print(f"    ✗ 抓取失败，使用API摘要: {len(content_text)} 字")
+                            # 二次抓取失败，跳过此条新闻
+                            print(f"    ✗ 二次抓取失败，跳过此条新闻: {article_url[:60]}...")
+                            continue
                     else:
                         # 不需要二次抓取
                         content_text = strip_tags(raw_content) if raw_content else ''
@@ -212,22 +214,40 @@ class NewsFetcher:
 
                     # 移除48小时检查（交给SQL的WHERE created_at > DATE_SUB...或Event清理）
                 
-                    # 提取图片
+                    # 提取内容（可能包含HTML）
+                    raw_content = ''
+                    if hasattr(entry, 'content') and entry.content:
+                        raw_content = entry.content[0].get('value', '')
+                    elif hasattr(entry, 'summary'):
+                        raw_content = entry.summary
+                    
+                    # 从正文中提取图片（支持<img src="...">格式）
+                    images = []
+                    if raw_content:
+                        from bs4 import BeautifulSoup
+                        soup = BeautifulSoup(raw_content, 'lxml')
+                        for img in soup.find_all('img'):
+                            src = img.get('src') or img.get('data-src')
+                            if src:
+                                images.append({
+                                    'url': src,
+                                    'alt': img.get('alt', ''),
+                                    'caption': img.get('alt', '')
+                                })
+                    
+                    # 提取封面图片（RSS标准字段）
                     image_url = None
                     if hasattr(entry, 'media_content') and entry.media_content:
                         image_url = entry.media_content[0].get('url')
                     elif hasattr(entry, 'enclosures') and entry.enclosures:
                         image_url = entry.enclosures[0].get('url')
-                
-                    # 提取内容（仅HTML清洗，不做长度检查）
-                    content = ''
-                    if hasattr(entry, 'content') and entry.content:
-                        content = entry.content[0].get('value', '')
-                    elif hasattr(entry, 'summary'):
-                        content = entry.summary
                     
-                    # 清理HTML标签（使用模块级函数）
-                    content_text = strip_tags(content) if content else ''
+                    # 如果没有封面但有正文图片，使用第一张作为封面
+                    if not image_url and images:
+                        image_url = images[0]['url']
+                
+                    # 清理HTML标签获取纯文本内容
+                    content_text = strip_tags(raw_content) if raw_content else ''
                     
                     # 不再检查长度，即使很短也传递给SQL（触发器会拦截<60的）
                     articles.append({
@@ -237,6 +257,7 @@ class NewsFetcher:
                         'source_name': source_config['name'],
                         'published_at': pub_time,
                         'image_url': image_url,
+                        'images': images,  # 保存所有提取的图片
                         'category_hint': source_config.get('category', 'general'),  # hint only
                         'country_hint': source_config.get('country_hint'),  # hint only
                         'fetch_method': 'rss'
@@ -263,7 +284,5 @@ class NewsFetcher:
         return all_articles
     
     def fetch_all_html_sources(self):
-        """所有HTML源抓取（国内+国际）"""
-        from core.html_fetcher import HTMLNewsFetcher
-        html_fetcher = HTMLNewsFetcher()
-        return html_fetcher.fetch_all_html_sources()
+        """所有HTML源抓取（国内+国际）- 保持向后兼容"""
+        return self.html_fetcher.fetch_all_html_sources()

@@ -18,6 +18,40 @@ class ContentProcessor:
     XML检索增强版：支持中英文分词，输出JSON格式供数据库存储过程使用
     """
     
+    # source_name 到 source_id 的映射（与 schema2.sql 中的来源顺序一致）
+    SOURCE_NAME_TO_ID = {
+        # NewsAPI
+        'NewsAPI': 1,
+        # RSS 来源
+        '36氪': 2,
+        '虎嗅网': 3,
+        'RT-中文': 4,
+        'FoxNews-World': 5,
+        '南华早报-SCMP': 6,
+        'FoxNews-Politics': 7,
+        'ChinaDaily': 8,
+        'NewYorker': 9,
+        '凤凰网-军事': 10,
+        'AP-美联社': 11,
+        '经济日报': 12,
+        # HTML 爬取来源
+        '新华网-时政': 13,
+        'CNN': 14,
+        '界面新闻': 15,
+        'Al Jazeera': 16,
+        '环球时报': 17,
+        'ScienceDaily': 18,
+        '俄罗斯卫星通讯社': 19,
+        '纽约时报-中文': 20,
+        '央视网-新闻': 21,
+        '央视网-视频': 22,
+        '观察者网': 23,
+        '华盛顿邮报': 24,
+        '纽约时报中文版': 25,
+        # 兼容 fetcher.py 中 NewsAPI 返回的名称
+        'newsapi': 1,
+    }
+    
     def __init__(self):
         # 中文停用词（简化版）
         self.zh_stopwords = {'的', '了', '在', '是', '我', '有', '和', '就', '不', '人', '都', 
@@ -137,11 +171,15 @@ class ContentProcessor:
             title_terms = self.tokenize_english(title)
             content_terms = self.tokenize_english(content[:2000])
         
+        # 根据 source_name 获取 source_id
+        source_name = article.get('source_name', '')
+        source_id = self.SOURCE_NAME_TO_ID.get(source_name, 1)
+        
         return {
             'title': title[:300],
             'content': content[:20000],
             'source_url': article.get('source_url', '')[:800],
-            'source_id': article.get('source_id', 1),
+            'source_id': source_id,
             'published_at': article.get('published_at'),
             'language': lang,
             'hint_country': article.get('country_hint'),
