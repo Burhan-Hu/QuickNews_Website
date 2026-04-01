@@ -1,4 +1,6 @@
-﻿import requests
+﻿import json
+
+import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
 from dateutil import parser as date_parser
@@ -6,9 +8,18 @@ import time
 import re
 import html
 
+# 尝试导入 curl_cffi，用于绕过 Cloudflare/Akamai 等反爬
+_CURL_CFFI_AVAILABLE = False
+try:
+    from curl_cffi import requests as curl_requests
+    _CURL_CFFI_AVAILABLE = True
+except ImportError:
+    curl_requests = None
+
 class HTMLNewsFetcher:
     """
     国内网站HTML直接抓取（绕过过期RSS）- 修复版
+    新增：对 WSJ/Reuters 等启用 TLS 指纹伪装的 curl_cffi 会话
     """
     
     def __init__(self):
@@ -16,11 +27,46 @@ class HTMLNewsFetcher:
         # 国内网站需要模拟浏览器，否则可能返回403或反爬页面
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
             'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
             'Accept-Encoding': 'gzip, deflate, br',
             'Connection': 'keep-alive',
+            'DNT': '1',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Cache-Control': 'max-age=0',
         })
+    
+    def _get_curl_session(self):
+        """
+        获取 curl_cffi Session（模拟 Chrome TLS 指纹），专门用于高反爬站点
+        """
+        if _CURL_CFFI_AVAILABLE and curl_requests is not None:
+            return curl_requests.Session(impersonate="chrome120")
+        return None
+    
+    def _get_soup(self, url, timeout=15, use_curl=False, curl_session=None, headers=None):
+        """
+        通用请求封装：支持普通 requests 和 curl_cffi
+        返回 (soup, response_text) 或抛出异常
+        """
+        req_headers = headers or {}
+        if use_curl and curl_session is not None:
+            resp = curl_session.get(url, timeout=timeout, headers=req_headers)
+        else:
+            resp = self.session.get(url, timeout=timeout, headers=req_headers)
+        resp.raise_for_status()
+        # 自动推断编码
+        if resp.encoding:
+            resp.encoding = resp.apparent_encoding or 'utf-8'
+        else:
+            resp.encoding = 'utf-8'
+        text = resp.text
+        soup = BeautifulSoup(text, 'lxml')
+        return soup, text
     
     def fetch_xinhua(self):
         """
@@ -1242,7 +1288,7 @@ class HTMLNewsFetcher:
                             except:
                                 pass
                     
-                    # 提取正文
+                    # 提取正文 - 保持原有逻辑不变
                     content = ''
                     selectors = ['#text', '#story_content', '.lead', '[itemprop="articleBody"]', '.article-content']
                     for sel in selectors:
@@ -1256,29 +1302,66 @@ class HTMLNewsFetcher:
                             if len(content) > 200:
                                 break
                     
-                    # 修复图片提取 - ScienceDaily使用相对路径 /images/
+                    # 修复图片提取 - 扩展选择器以覆盖 #story_text, #featured, figure等
                     images = []
-                    for img in article_soup.select('#text img, .lead img, [itemprop="articleBody"] img, .main-content img'):
-                        src = img.get('src', '')
-                        if src and not src.endswith('.gif'):
-                            # 补全URL（关键修复：ScienceDaily图片是相对路径 /images/...）
+                    # 关键修复：使用更广泛的选择器覆盖外层容器 #story_text 和特色图片区 #featured
+                    img_selectors = [
+                        '#story_text img',      # 外层故事容器（包含#featured和#text）
+                        '#featured img',        # 顶部特色图片区
+                        'figure img',           # 所有figure标签内的图片
+                        '.mainimg img',         # 主图片类
+                        '#text img',            # 正文区图片（原有）
+                        '.lead img', 
+                        '[itemprop="articleBody"] img', 
+                        '.main-content img'
+                    ]
+                    
+                    processed_imgs = set()  # 防止重复
+                    
+                    for selector in img_selectors:
+                        for img in article_soup.select(selector):
+                            src = img.get('src', '').strip()
+                            
+                            # 如果没有src但有srcset，从srcset提取第一个URL（通常是高分辨率版本）
+                            if not src:
+                                srcset = img.get('srcset', '').strip()
+                                if srcset:
+                                    # srcset格式: "url1 600w, url2 1200w..."，取第一个URL
+                                    src = srcset.split(',')[0].split()[0]
+                            
+                            if not src or src in processed_imgs:
+                                continue
+                            
+                            # 排除图标类图片（保留.gif排除逻辑）
+                            if src.endswith('.gif') or any(x in src.lower() for x in ['icon', 'logo', 'button']):
+                                continue
+                            
+                            # 补全URL（关键修复：处理 /images/... 相对路径）
                             if src.startswith('/'):
                                 src = 'https://www.sciencedaily.com' + src
                             elif not src.startswith('http'):
                                 src = 'https://www.sciencedaily.com/' + src
                             
+                            processed_imgs.add(src)
+                            
                             alt = img.get('alt', '')
-                            # 排除图标类图片
-                            if any(x in src.lower() for x in ['icon', 'logo', 'button']):
-                                continue
+                            # 尝试获取figcaption作为caption
+                            caption = ''
+                            figure_parent = img.find_parent('figure')
+                            if figure_parent:
+                                figcaption = figure_parent.find('figcaption')
+                                if figcaption:
+                                    caption = figcaption.get_text(strip=True)
+                            if not caption:
+                                caption = img.get('title', alt)
                                 
                             images.append({
                                 'url': src, 
                                 'alt': alt, 
-                                'caption': img.get('title', alt)
+                                'caption': caption
                             })
                     
-                    # 视频提取
+                    # 视频提取（保持原有逻辑）
                     videos = []
                     for iframe in article_soup.find_all('iframe'):
                         src = iframe.get('src', '')
@@ -1636,18 +1719,62 @@ class HTMLNewsFetcher:
                                     'caption': ''
                                 })
                         
-                        # 提取视频
+                        # 提取视频 - 关键修复：过滤Google Tag Manager、广告和分析iframe
                         videos = []
+                        
+                        # 定义需要排除的垃圾域名/模式（跟踪、广告、分析工具）
+                        skip_iframe_patterns = [
+                            'googletagmanager.com',      # Google Tag Manager
+                            'google-analytics.com',      # Google Analytics
+                            'doubleclick.net',           # Google广告
+                            'googleadservices.com',      # Google广告服务
+                            'facebook.com/tr/',          # Facebook跟踪像素
+                            'connect.facebook.net',      # Facebook SDK
+                            'bat.bing.com',              # Bing跟踪
+                            'tags.tiqcdn.com',           # Tealium标签管理
+                            'analytics',                 # 通用分析关键词
+                            'tracker',                   # 通用跟踪关键词
+                            'pixel',                     # 通用像素关键词
+                            'gtm-',                      # GTM容器ID模式
+                            'gtag',                      # Google标签
+                            'scribe.',                   # 日志/记录服务
+                            'heatmap',                   # 热力图跟踪
+                            'optimizely',                # A/B测试
+                            'hotjar',                    # 用户行为分析
+                        ]
+                        
                         for iframe in article_soup.find_all('iframe'):
-                            src = iframe.get('src', '')
-                            if src:
-                                if src.startswith('//'):
-                                    src = 'https:' + src
-                                videos.append({
-                                    'url': src,
-                                    'type': 'iframe',
-                                    'platform': 'nytimes'
-                                })
+                            src = iframe.get('src', '').strip()
+                            if not src:
+                                continue
+                            
+                            # 关键修复：检查并过滤掉跟踪/广告 iframe
+                            src_lower = src.lower()
+                            if any(pattern in src_lower for pattern in skip_iframe_patterns):
+                                continue
+                            
+                            # 处理协议相对URL
+                            if src.startswith('//'):
+                                src = 'https:' + src
+                            elif src.startswith('/'):
+                                src = 'https://cn.nytimes.com' + src
+                            
+                            # 识别视频平台
+                            platform = 'unknown'
+                            if any(x in src for x in ['youtube.com', 'youtu.be']):
+                                platform = 'youtube'
+                            elif 'vimeo.com' in src:
+                                platform = 'vimeo'
+                            elif 'cn.nytimes.com' in src or 'nytimes.com/video' in src:
+                                platform = 'nytimes'
+                            elif 'player' in src:
+                                platform = 'player'
+                            
+                            videos.append({
+                                'url': src,
+                                'type': 'iframe',
+                                'platform': platform
+                            })
                         
                         if content:
                             articles.append({
@@ -1682,12 +1809,534 @@ class HTMLNewsFetcher:
         
         print(f"[HTML] ✓ 纽约时报-中文: 共 {len(all_articles)} 条")
         return all_articles
-
     
+    # ==================== 新增：BBC 新闻爬取 ====================
+
+    def fetch_bbc(self):
+        """
+        BBC 新闻 HTML抓取
+        网址: https://www.bbc.com/news
+        文章URL模式: https://www.bbc.com/news/articles/xxxxxxxxxx
+        """
+        urls = [
+            'https://www.bbc.com/news',
+            'https://www.bbc.com/news/world',
+            'https://www.bbc.com/news/business',
+            'https://www.bbc.com/news/technology',
+        ]
+        
+        all_articles = []
+        
+        for url in urls:
+            try:
+                category = url.split('/')[-1] if url != 'https://www.bbc.com/news' else 'news'
+                print(f"[HTML] 抓取: BBC-{category}")
+                
+                response = self.session.get(url, timeout=15, headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                })
+                response.raise_for_status()
+                response.encoding = 'utf-8'
+                
+                soup = BeautifulSoup(response.text, 'lxml')
+                
+                # BBC文章链接模式
+                article_links = []
+                for a in soup.find_all('a', href=re.compile(r'/news/articles/[a-z0-9]+')):
+                    title = a.get_text(strip=True)
+                    href = a.get('href', '')
+                    if title and len(title) > 10:
+                        if href.startswith('/'):
+                            href = 'https://www.bbc.com' + href
+                        article_links.append((title, href))
+                
+                # 去重
+                seen = set()
+                unique_links = []
+                for title, href in article_links[:15]:
+                    if href not in seen:
+                        seen.add(href)
+                        unique_links.append((title, href))
+                
+                print(f"  [Debug] {category} 找到 {len(unique_links)} 条")
+                
+                for title, href in unique_links:
+                    try:
+                        print(f"  [BBC] 获取: {title[:50]}...")
+                        
+                        article_resp = self.session.get(href, timeout=10, headers={
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                        })
+                        article_resp.encoding = 'utf-8'
+                        article_soup = BeautifulSoup(article_resp.text, 'lxml')
+                        
+                        # 提取时间
+                        pub_time = datetime.now()
+                        time_elem = article_soup.find('time') or article_soup.find('span', {'data-testid': 'timestamp'})
+                        if time_elem:
+                            datetime_attr = time_elem.get('datetime') or time_elem.get_text()
+                            if datetime_attr:
+                                try:
+                                    pub_time = date_parser.parse(datetime_attr)
+                                except:
+                                    pass
+                        
+                        # 提取正文 - BBC使用 data-component="text-block"
+                        content = ''
+                        text_blocks = article_soup.find_all('div', {'data-component': 'text-block'})
+                        if text_blocks:
+                            texts = []
+                            for block in text_blocks:
+                                text = block.get_text(strip=True)
+                                if text and len(text) > 10:
+                                    texts.append(text)
+                            content = '\n\n'.join(texts)
+                        
+                        # 兜底方案
+                        if not content:
+                            selectors = ['article', '[data-testid="article-body"]', '.ssrcss-pv1rh6-ArticleWrapper']
+                            for sel in selectors:
+                                content_elem = article_soup.select_one(sel)
+                                if content_elem:
+                                    for tag in content_elem.find_all(['script', 'style']):
+                                        tag.decompose()
+                                    texts = [p.get_text(strip=True) for p in content_elem.find_all('p') if p.get_text(strip=True)]
+                                    content = '\n\n'.join(texts)
+                                    if content:
+                                        break
+                        
+                        # 提取图片 - BBC图片在 figure 标签内
+                        images = []
+                        for figure in article_soup.find_all('figure'):
+                            img = figure.find('img')
+                            if img:
+                                src = img.get('src', '')
+                                if not src:
+                                    src = img.get('data-src', '')
+                                
+                                if src:
+                                    if src.startswith('//'):
+                                        src = 'https:' + src
+                                    
+                                    # 过滤小图标
+                                    if any(x in src.lower() for x in ['icon', 'logo', 'avatar']):
+                                        continue
+                                    
+                                    caption = ''
+                                    caption_elem = figure.find('figcaption')
+                                    if caption_elem:
+                                        caption = caption_elem.get_text(strip=True)
+                                    
+                                    images.append({
+                                        'url': src,
+                                        'alt': img.get('alt', ''),
+                                        'caption': caption
+                                    })
+                        
+                        # 提取视频
+                        videos = []
+                        # BBC视频通常在特定div中
+                        for video_div in article_soup.find_all('div', {'data-component': 'video-block'}):
+                            iframe = video_div.find('iframe')
+                            if iframe:
+                                src = iframe.get('src', '')
+                                if src:
+                                    if src.startswith('//'):
+                                        src = 'https:' + src
+                                    videos.append({
+                                        'url': src,
+                                        'type': 'iframe',
+                                        'platform': 'bbc'
+                                    })
+                        
+                        if content and len(content) > 100:
+                            all_articles.append({
+                                'title': title[:300],
+                                'content': content[:20000],
+                                'source_url': href,
+                                'source_name': 'BBC',
+                                'published_at': pub_time,
+                                'image_url': images[0]['url'] if images else None,
+                                'images': images,
+                                'videos': videos,
+                                'category_hint': category,
+                                'country_hint': 'GB',
+                                'fetch_method': 'html_bbc'
+                            })
+                            print(f"    ✓ 获取成功 ({len(content)}字, {len(images)}图, {len(videos)}视频)")
+                        else:
+                            print(f"    ✗ 内容为空")
+                        
+                        time.sleep(1)
+                        
+                    except Exception as e:
+                        print(f"    ✗ 失败: {str(e)[:50]}")
+                        continue
+                
+                time.sleep(1)
+                
+            except Exception as e:
+                print(f"[HTML] ✗ BBC {url}: {str(e)[:50]}")
+                continue
+        
+        print(f"[HTML] ✓ BBC: 共 {len(all_articles)} 条")
+        return all_articles
+
+    # ==================== 新增：华尔街日报视频爬取（curl_cffi 修复版） ====================
+
+    def fetch_wsj_video(self):
+        """
+        华尔街日报视频 HTML抓取
+        修复：使用 curl_cffi 绕过反爬；增强 JSON-LD 与兜底选择器
+        """
+        urls = [
+            'https://www.wsj.com/video/china',
+            'https://www.wsj.com/video/world',
+            'https://www.wsj.com/video/business',
+        ]
+        
+        all_videos = []
+        curl_session = self._get_curl_session()
+        use_curl = curl_session is not None
+        
+        for url in urls:
+            try:
+                category = url.split('/')[-1]
+                print(f"[HTML] 抓取: WSJ-视频-{category}")
+                
+                soup, _ = self._get_soup(url, timeout=15, use_curl=use_curl, curl_session=curl_session)
+                
+                # 优先从 JSON-LD 提取视频列表
+                video_items = []
+                for script in soup.find_all('script', {'type': 'application/ld+json'}):
+                    try:
+                        data = json.loads(script.string or '{}')
+                        items = data if isinstance(data, list) else [data]
+                        for item in items:
+                            if item.get('@type') == 'ItemList' and item.get('itemListElement'):
+                                for elem in item['itemListElement']:
+                                    if elem.get('@type') == 'ListItem':
+                                        v = elem.get('item', {})
+                                        if v.get('@type') == 'VideoObject':
+                                            title = v.get('name', '')
+                                            href = v.get('url', '')
+                                            if href:
+                                                guid_match = re.search(r'guid=([a-f0-9\-]+)', href)
+                                                guid = guid_match.group(1) if guid_match else ''
+                                                if guid:
+                                                    video_api_url = f"https://video-api.wsj.com/api-video/player/iframe.html?guid={guid}"
+                                                    video_items.append((title, video_api_url, guid))
+                    except Exception:
+                        continue
+                
+                # 从页面链接提取
+                if not video_items:
+                    for a in soup.find_all('a', href=True):
+                        href = a['href']
+                        if '/video/' in href or 'guid=' in href:
+                            title = a.get_text(strip=True) or a.get('title', '')
+                            if title and len(title) > 3:
+                                if href.startswith('/'):
+                                    href = 'https://www.wsj.com' + href
+                                guid_match = re.search(r'guid=([a-f0-9\-]+)', href)
+                                if guid_match:
+                                    guid = guid_match.group(1)
+                                    video_api_url = f"https://video-api.wsj.com/api-video/player/iframe.html?guid={guid}"
+                                    video_items.append((title, video_api_url, guid))
+                
+                # 去重
+                seen = set()
+                unique_items = []
+                for title, href, guid in video_items[:15]:
+                    if guid and guid not in seen:
+                        seen.add(guid)
+                        unique_items.append((title, href, guid))
+                
+                print(f"  [Debug] {category} 找到 {len(unique_items)} 条视频")
+                
+                for title, video_url, guid in unique_items:
+                    try:
+                        print(f"  [WSJ-Video] 获取: {title[:50]}...")
+                        video_soup, _ = self._get_soup(video_url, timeout=10, use_curl=use_curl, curl_session=curl_session)
+                        
+                        description = ''
+                        desc_elem = video_soup.find('meta', {'name': 'description'})
+                        if desc_elem:
+                            description = desc_elem.get('content', '')
+                        
+                        pub_time = datetime.now()
+                        time_meta = video_soup.find('meta', {'property': 'article:published_time'})
+                        if time_meta:
+                            try:
+                                pub_time = date_parser.parse(time_meta.get('content', ''))
+                            except:
+                                pass
+                        
+                        thumbnail = ''
+                        thumb_meta = video_soup.find('meta', {'property': 'og:image'})
+                        if thumb_meta:
+                            thumbnail = thumb_meta.get('content', '')
+                        
+                        videos = [{'url': video_url, 'type': 'iframe', 'platform': 'wsj', 'guid': guid}]
+                        
+                        # 从 <head> 的 meta/link 标签中补充视频直链（如 og:video 等）
+                        head = video_soup.head
+                        if head:
+                            for meta in head.find_all('meta'):
+                                prop = (meta.get('property') or '').lower()
+                                name = (meta.get('name') or '').lower()
+                                content = meta.get('content', '')
+                                if prop in ('og:video', 'og:video:url', 'og:video:secure_url', 'twitter:player', 'video_src') or \
+                                   name in ('twitter:player', 'video_src'):
+                                    if content and content not in [v['url'] for v in videos]:
+                                        videos.append({'url': content, 'type': 'meta', 'platform': 'wsj', 'guid': guid})
+                            for link in head.find_all('link', rel=True):
+                                rel = link.get('rel', [''])[0].lower() if isinstance(link.get('rel'), list) else link.get('rel', '').lower()
+                                if rel in ('video_src',):
+                                    href_val = link.get('href', '')
+                                    if href_val and href_val not in [v['url'] for v in videos]:
+                                        videos.append({'url': href_val, 'type': 'link', 'platform': 'wsj', 'guid': guid})
+                        
+                        images = []
+                        if thumbnail:
+                            images.append({'url': thumbnail, 'alt': title, 'caption': ''})
+                        
+                        all_videos.append({
+                            'title': title[:300],
+                            'content': description[:20000] if description else title,
+                            'source_url': video_url,
+                            'source_name': '华尔街日报-视频',
+                            'published_at': pub_time,
+                            'image_url': thumbnail if thumbnail else None,
+                            'images': images,
+                            'videos': videos,
+                            'category_hint': category,
+                            'country_hint': 'US',
+                            'fetch_method': 'html_wsj_video'
+                        })
+                        print(f"    ✓ 获取成功 (视频: {guid})")
+                        time.sleep(1)
+                    except Exception as e:
+                        print(f"    ✗ 失败: {str(e)[:80]}")
+                        continue
+                
+                time.sleep(1)
+            except Exception as e:
+                print(f"[HTML] ✗ WSJ-视频 {url}: {str(e)[:80]}")
+                continue
+        
+        print(f"[HTML] ✓ WSJ-视频: 共 {len(all_videos)} 条")
+        return all_videos
+
+    # ==================== 新增：路透社视频爬取（curl_cffi 修复版） ====================
+
+    def fetch_reuters_video(self):
+        """
+        路透社视频 HTML抓取 - 支持 m3u8 格式
+        修复：使用 curl_cffi 绕过反爬；增强 JSON-LD / script / video 标签兜底
+        """
+        urls = [
+            'https://www.reuters.com/video/',
+            'https://www.reuters.com/video/world/',
+            'https://www.reuters.com/video/business/',
+        ]
+        
+        all_videos = []
+        curl_session = self._get_curl_session()
+        use_curl = curl_session is not None
+        
+        for url in urls:
+            try:
+                category = url.split('/')[-2] if url.endswith('/') else url.split('/')[-1]
+                if not category or category == 'video':
+                    category = 'news'
+                print(f"[HTML] 抓取: Reuters-视频-{category}")
+                
+                soup, _ = self._get_soup(url, timeout=15, use_curl=use_curl, curl_session=curl_session)
+                
+                # 提取视频链接
+                video_items = []
+                
+                # 方法1: JSON-LD ItemList
+                for script in soup.find_all('script', {'type': 'application/ld+json'}):
+                    try:
+                        data = json.loads(script.string or '{}')
+                        items = data if isinstance(data, list) else [data]
+                        for item in items:
+                            if item.get('@type') == 'ItemList' and item.get('itemListElement'):
+                                for elem in item['itemListElement']:
+                                    if elem.get('@type') == 'ListItem':
+                                        v = elem.get('item', {})
+                                        if v.get('@type') == 'VideoObject':
+                                            title = v.get('name', '')
+                                            href = v.get('url', '')
+                                            if href:
+                                                if href.startswith('/'):
+                                                    href = 'https://www.reuters.com' + href
+                                                video_items.append((title, href))
+                            elif item.get('@type') == 'VideoObject' and item.get('url'):
+                                title = item.get('name', '')
+                                href = item['url']
+                                if href.startswith('/'):
+                                    href = 'https://www.reuters.com' + href
+                                video_items.append((title, href))
+                    except Exception:
+                        continue
+                
+                # 方法2: 页面 a 标签
+                if not video_items:
+                    for a in soup.find_all('a', href=True):
+                        href = a['href']
+                        if '/video/' in href or '/watch/' in href:
+                            title = a.get_text(strip=True) or a.get('title', '')
+                            if title and len(title) > 3:
+                                if href.startswith('/'):
+                                    href = 'https://www.reuters.com' + href
+                                video_items.append((title, href))
+                
+                # 去重
+                seen = set()
+                unique_items = []
+                for title, href in video_items[:15]:
+                    if href not in seen:
+                        seen.add(href)
+                        unique_items.append((title, href))
+                
+                print(f"  [Debug] {category} 找到 {len(unique_items)} 条视频")
+                
+                for title, video_page_url in unique_items:
+                    try:
+                        print(f"  [Reuters-Video] 获取: {title[:50]}...")
+                        video_soup, raw_text = self._get_soup(video_page_url, timeout=10, use_curl=use_curl, curl_session=curl_session)
+                        
+                        m3u8_url = None
+                        
+                        # 方法1: script 标签正则
+                        for script in video_soup.find_all('script'):
+                            script_text = script.string or ''
+                            m3u8_match = re.search(r'https?://[^\s"\'<>]+\.m3u8', script_text)
+                            if m3u8_match:
+                                m3u8_url = m3u8_match.group(0)
+                                break
+                        
+                        # 方法2: video / source 标签
+                        if not m3u8_url:
+                            for elem in video_soup.find_all(['video', 'source']):
+                                src = elem.get('src', '') or elem.get('data-src', '')
+                                if '.m3u8' in src:
+                                    m3u8_url = src
+                                    break
+                        
+                        # 方法3: JSON-LD VideoObject
+                        if not m3u8_url:
+                            for script in video_soup.find_all('script', {'type': 'application/ld+json'}):
+                                try:
+                                    data = json.loads(script.string or '{}')
+                                    if data.get('@type') == 'VideoObject':
+                                        for key in ('contentUrl', 'embedUrl', 'url'):
+                                            val = data.get(key, '')
+                                            if val and '.m3u8' in val:
+                                                m3u8_url = val
+                                                break
+                                    if not m3u8_url and isinstance(data, dict) and 'video' in data:
+                                        content_url = data['video'].get('contentUrl', '')
+                                        if '.m3u8' in content_url:
+                                            m3u8_url = content_url
+                                except Exception:
+                                    continue
+                                if m3u8_url:
+                                    break
+                        
+                        # 方法4: 从原始页面文本中全局搜索 mp4 / m3u8（兜底）
+                        if not m3u8_url:
+                            mp4_match = re.search(r'https?://[^\s"\'<>]+\.(?:m3u8|mp4)', raw_text)
+                            if mp4_match:
+                                m3u8_url = mp4_match.group(0)
+                        
+                        # 方法5: 从 <head> 的 meta/link 标签中提取视频 URL
+                        if not m3u8_url:
+                            head = video_soup.head
+                            if head:
+                                for meta in head.find_all('meta'):
+                                    content = meta.get('content', '')
+                                    if content and ('.m3u8' in content or '.mp4' in content):
+                                        m3u8_url = content
+                                        break
+                                if not m3u8_url:
+                                    for link in head.find_all('link', href=True):
+                                        href_val = link.get('href', '')
+                                        if href_val and ('.m3u8' in href_val or '.mp4' in href_val):
+                                            m3u8_url = href_val
+                                            break
+                        
+                        description = ''
+                        desc_elem = video_soup.find('meta', {'name': 'description'})
+                        if desc_elem:
+                            description = desc_elem.get('content', '')
+                        
+                        pub_time = datetime.now()
+                        time_meta = video_soup.find('meta', {'property': 'article:published_time'})
+                        if time_meta:
+                            try:
+                                pub_time = date_parser.parse(time_meta.get('content', ''))
+                            except:
+                                pass
+                        
+                        thumbnail = ''
+                        thumb_meta = video_soup.find('meta', {'property': 'og:image'})
+                        if thumb_meta:
+                            thumbnail = thumb_meta.get('content', '')
+                        
+                        videos = []
+                        if m3u8_url:
+                            videos.append({'url': m3u8_url, 'type': 'hls', 'platform': 'reuters'})
+                        
+                        images = []
+                        if thumbnail:
+                            images.append({'url': thumbnail, 'alt': title, 'caption': ''})
+                        
+                        all_videos.append({
+                            'title': title[:300],
+                            'content': description[:20000] if description else title,
+                            'source_url': video_page_url,
+                            'source_name': '路透社-视频',
+                            'published_at': pub_time,
+                            'image_url': thumbnail if thumbnail else None,
+                            'images': images,
+                            'videos': videos,
+                            'category_hint': category,
+                            'country_hint': 'US',
+                            'fetch_method': 'html_reuters_video'
+                        })
+                        
+                        if m3u8_url:
+                            print(f"    ✓ 获取成功 (m3u8: {m3u8_url[:60]}...)")
+                        else:
+                            print(f"    ⚠ 未找到 m3u8 URL，使用页面URL")
+                        
+                        time.sleep(1)
+                    except Exception as e:
+                        print(f"    ✗ 失败: {str(e)[:80]}")
+                        continue
+                
+                time.sleep(1)
+            except Exception as e:
+                print(f"[HTML] ✗ Reuters-视频 {url}: {str(e)[:80]}")
+                continue
+        
+        print(f"[HTML] ✓ Reuters-视频: 共 {len(all_videos)} 条")
+        return all_videos
+                
     def fetch_all_html_sources(self):
         """抓取所有HTML源（包括国内和国际）"""
         all_articles = []
         # 国内源
+        all_articles.extend(self.fetch_bbc() or [])
+        time.sleep(1)
+        all_articles.extend(self.fetch_wsj_video() or [])
+        time.sleep(1)
+        all_articles.extend(self.fetch_reuters_video() or [])
+        
         all_articles.extend(self.fetch_jiemian() or [])
         all_articles.extend(self.fetch_xinhua() or [])
         all_articles.extend(self.fetch_cnn() or [])

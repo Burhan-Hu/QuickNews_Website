@@ -1,8 +1,17 @@
 ﻿import time
 import sys
+import os
 from datetime import datetime
 from scheduler.jobs import NewsScheduler
 from config.db_config import test_connection
+import threading
+
+def start_flask_api():
+    """在后台线程启动 Flask API 服务"""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from ir.xml_api import app
+    print("[Flask] 启动 API 服务于 http://0.0.0.0:5000")
+    app.run(host='0.0.0.0', port=5000, threaded=True, debug=False, use_reloader=False)
 
 def main():
     print("=" * 60)
@@ -31,7 +40,11 @@ def main():
     try:
         scheduler.start()
         
-        # 立即执行一次NewsAPI
+        # 启动 Flask API 后台线程
+        flask_thread = threading.Thread(target=start_flask_api, daemon=True)
+        flask_thread.start()
+        
+        """# 立即执行一次NewsAPI
         from config.sources import NEWSAPI_CONFIG
         if NEWSAPI_CONFIG['api_key'] and 'your-newsapi-key' not in NEWSAPI_CONFIG['api_key']:
             print("\n[Init] 执行首次NewsAPI抓取...")
@@ -47,7 +60,7 @@ def main():
             else:
                 print("[Init] NewsAPI本次未获取到数据")
         else:
-            print("\n[Init] NewsAPI未配置，跳过API抓取（仅使用RSS）")
+            print("\n[Init] NewsAPI未配置，跳过API抓取（仅使用RSS）")"""
         
         # 立即执行一次RSS
         print("\n[Init] 执行首次RSS抓取...")

@@ -25,18 +25,18 @@ COUNTRY_CODES = ['us', 'gb', 'jp', 'de', 'fr', 'au', 'ca', 'cn', 'in', 'kr']
 # RSS源配置（作为NewsAPI补充，无限制）
 RSS_SOURCES = [
     # 国内源（中文，优先）
-    {'name': '36氪', 'url': 'https://36kr.com/feed', 'lang': 'zh', 'category': 'tech'},
-    {'name': '虎嗅网', 'url': 'https://rss.aishort.top/?type=huxiu', 'lang': 'zh', 'category': 'tech'},
+    #{'name': '36氪', 'url': 'https://36kr.com/feed', 'lang': 'zh', 'category': 'tech'},
+    #{'name': '虎嗅网', 'url': 'https://rss.aishort.top/?type=huxiu', 'lang': 'zh', 'category': 'tech'},
     # 国际源
-    {'name': 'RT-中文', 'url': 'https://www.rt.com/rss/news/', 'lang': 'en', 'category': 'international'},
-    {'name': 'FoxNews-World', 'url': 'http://feeds.foxnews.com/foxnews/world','lang': 'en', 'category': 'international','country_hint': 'US'},
-    {'name': '南华早报-SCMP', 'url': 'https://feedx.net/rss/scmp.xml', 'lang': 'en', 'category': 'international', 'country_hint': 'HK'},
-    {'name': 'FoxNews-Politics', 'url': 'http://feeds.foxnews.com/foxnews/politics','lang': 'en', 'category': 'politics','country_hint': 'US'},
+    #{'name': 'RT-中文', 'url': 'https://www.rt.com/rss/news/', 'lang': 'en', 'category': 'international'},
+    #{'name': 'FoxNews-World', 'url': 'http://feeds.foxnews.com/foxnews/world','lang': 'en', 'category': 'international','country_hint': 'US'},
+    #{'name': '南华早报-SCMP', 'url': 'https://feedx.net/rss/scmp.xml', 'lang': 'en', 'category': 'international', 'country_hint': 'HK'},
+    #{'name': 'FoxNews-Politics', 'url': 'http://feeds.foxnews.com/foxnews/politics','lang': 'en', 'category': 'politics','country_hint': 'US'},
     # 新增RSS源
-    {'name': 'ChinaDaily', 'url': 'https://feedx.net/rss/chinadaily.xml', 'lang': 'en', 'category': 'international'},
-    {'name': 'NewYorker', 'url': 'https://feedx.net/rss/newyorker.xml', 'lang': 'en', 'category': 'culture'},
-    {'name': '凤凰网-军事', 'url': 'https://feedx.net/rss/ifengmil.xml', 'lang': 'zh', 'category': 'military', 'country_hint': 'CN'},
-    {'name': 'AP-美联社', 'url': 'https://feedx.net/rss/ap.xml', 'lang': 'en', 'category': 'international', 'country_hint': 'US'},
+    #{'name': 'ChinaDaily', 'url': 'https://feedx.net/rss/chinadaily.xml', 'lang': 'en', 'category': 'international'},
+    #{'name': 'NewYorker', 'url': 'https://feedx.net/rss/newyorker.xml', 'lang': 'en', 'category': 'culture'},
+    #{'name': '凤凰网-军事', 'url': 'https://feedx.net/rss/ifengmil.xml', 'lang': 'zh', 'category': 'military', 'country_hint': 'CN'},
+    #{'name': 'AP-美联社', 'url': 'https://feedx.net/rss/ap.xml', 'lang': 'en', 'category': 'international', 'country_hint': 'US'},
     {'name': '经济日报', 'url': 'https://feedx.net/rss/jingjiribao.xml', 'lang': 'zh', 'category': 'business', 'country_hint': 'CN'}
 ]
 

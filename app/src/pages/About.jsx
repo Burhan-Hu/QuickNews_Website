@@ -3,14 +3,35 @@
  * 地球在中间，信息分布在左右两边
  */
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Database, Globe, Server, Code, Zap, Clock, Newspaper } from 'lucide-react';
 import Earth3D from '../components/Earth3D';
+import { getSources } from '../utils/api';
 
 export default function About() {
   const navigate = useNavigate();
+  const [newsSources, setNewsSources] = useState([]);
+  const [loading, setLoading] = useState(true);
+  
+  // 加载新闻来源数据
+  useEffect(() => {
+    loadSources();
+  }, []);
+  
+  const loadSources = async () => {
+    setLoading(true);
+    try {
+      const sources = await getSources();
+      setNewsSources(sources);
+      console.log('[About] 新闻来源:', sources);
+    } catch (error) {
+      console.error('Load sources error:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
   
   // 返回主页
   const handleBack = () => {
@@ -25,18 +46,6 @@ export default function About() {
     { name: 'Three.js', icon: <Globe size={20} />, desc: '3D 图形库', color: '#e74c3c' },
     { name: 'Tailwind CSS', icon: <Zap size={20} />, desc: 'CSS 框架', color: '#2ecc71' },
     { name: 'Framer Motion', icon: <Clock size={20} />, desc: '动画库', color: '#9b59b6' },
-  ];
-  
-  // 新闻源数据
-  const newsSources = [
-    { name: 'Reuters', logo: 'R', color: '#ff6b00' },
-    { name: 'BBC', logo: 'B', color: '#bb1919' },
-    { name: '新华网', logo: 'X', color: '#c41e3a' },
-    { name: 'Associated Press', logo: 'AP', color: '#ff0000' },
-    { name: '财新网', logo: 'C', color: '#1a5276' },
-    { name: '澎湃新闻', logo: 'P', color: '#000000' },
-    { name: 'TechCrunch', logo: 'TC', color: '#0a9e01' },
-    { name: 'The Verge', logo: 'V', color: '#e2127a' },
   ];
   
   // 功能特性
@@ -203,26 +212,35 @@ export default function About() {
             <h2 className="text-white/80 font-medium mb-4 flex items-center gap-2">
               <Newspaper size={20} className="text-[#00d4ff]" />
               新闻数据源
+              {loading && (
+                <div className="w-4 h-4 border-2 border-[#00d4ff] border-t-transparent rounded-full animate-spin ml-2" />
+              )}
             </h2>
             <div className="grid grid-cols-2 gap-2">
-              {newsSources.map((source, index) => (
-                <motion.div
-                  key={source.name}
-                  className="glass p-2 rounded-lg text-center cursor-pointer transition-all hover:bg-white/10"
-                  initial={{ opacity: 0, scale: 0.8 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  transition={{ delay: 0.8 + index * 0.05, duration: 0.3 }}
-                  whileHover={{ scale: 1.05 }}
-                >
-                  <div 
-                    className="w-8 h-8 rounded-full mx-auto mb-1 flex items-center justify-center text-white text-xs font-bold"
-                    style={{ backgroundColor: source.color }}
+              {newsSources.length > 0 ? (
+                newsSources.map((source, index) => (
+                  <motion.div
+                    key={source.name}
+                    className="glass p-2 rounded-lg text-center cursor-pointer transition-all hover:bg-white/10"
+                    initial={{ opacity: 0, scale: 0.8 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ delay: 0.8 + index * 0.05, duration: 0.3 }}
+                    whileHover={{ scale: 1.05 }}
                   >
-                    {source.logo}
-                  </div>
-                  <div className="text-white/70 text-xs">{source.name}</div>
-                </motion.div>
-              ))}
+                    <div 
+                      className="w-8 h-8 rounded-full mx-auto mb-1 flex items-center justify-center text-white text-xs font-bold"
+                      style={{ backgroundColor: source.color }}
+                    >
+                      {source.logo}
+                    </div>
+                    <div className="text-white/70 text-xs truncate">{source.name}</div>
+                  </motion.div>
+                ))
+              ) : (
+                <div className="col-span-2 text-center py-4 text-white/40 text-sm">
+                  暂无来源数据
+                </div>
+              )}
             </div>
           </motion.section>
           

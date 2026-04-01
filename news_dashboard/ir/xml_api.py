@@ -1,4 +1,5 @@
-﻿from flask import Flask, request, Response
+from flask import Flask, request, Response, jsonify
+from flask_cors import CORS
 from sqlalchemy import text
 import sys,os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -9,6 +10,24 @@ import html
 import json
 
 app = Flask(__name__)
+
+# 配置 CORS，允许前端开发服务器访问
+CORS(app, resources={
+    r"/api/*": {
+        "origins": ["http://localhost:5173", "http://127.0.0.1:5173"],
+        "methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"]
+    },
+    r"/sru*": {
+        "origins": ["http://localhost:5173", "http://127.0.0.1:5173"],
+        "methods": ["GET", "OPTIONS"],
+        "allow_headers": ["Content-Type"]
+    },
+    r"/health": {
+        "origins": "*",
+        "methods": ["GET", "OPTIONS"]
+    }
+})
 
 class XMLSearchEngine:
     def __init__(self):
@@ -273,6 +292,293 @@ def health():
         return {'status': 'ok', 'database': 'connected'}
     except Exception as e:
         return {'status': 'error', 'message': str(e)}, 500
+
+
+# ==================== 新增 API 端点 ====================
+
+@app.route('/api/stats/countries', methods=['GET'])
+def get_country_stats():
+    """
+    获取近48小时内各国新闻数量统计
+    返回格式: {"CN": 45, "US": 38, "JP": 25, ...}
+    """
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT 
+                    nc.country_code,
+                    COUNT(*) as news_count
+                FROM news_countries nc
+                JOIN news n ON nc.news_id = n.news_id
+                WHERE n.created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR)
+                  AND nc.is_primary = TRUE
+                GROUP BY nc.country_code
+                ORDER BY news_count DESC
+            """))
+            
+            stats = {}
+            for row in result.fetchall():
+                country_code = row[0]
+                count = row[1]
+                if country_code:
+                    stats[country_code] = count
+            
+            return jsonify(stats)
+    except Exception as e:
+        print(f"[API Error] get_country_stats: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/stats/topics', methods=['GET'])
+def get_hot_topics():
+    """
+    获取近48小时内的热门话题 TOP 10
+    返回格式: [{"name": "人工智能", "count": 156}, {"name": "气候变化", "count": 132}, ...]
+    """
+    try:
+        with engine.connect() as conn:
+            # 方案1: 从 inverted_index 表查询高频词项（标题权重更高）
+            result = conn.execute(text("""
+                SELECT 
+                    ii.term,
+                    COUNT(DISTINCT ii.news_id) as doc_count,
+                    SUM(ii.tf_weight) as total_weight
+                FROM inverted_index ii
+                JOIN news n ON ii.news_id = n.news_id
+                WHERE n.created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR)
+                  AND ii.language = 'zh'
+                  AND LENGTH(ii.term) >= 2
+                  AND ii.term NOT IN ('中国', '美国', '日本', '今天', '我们', '他们', '可以', '进行', '表示', '认为', '已经', '开始', '目前', '今年', '去年')
+                GROUP BY ii.term
+                HAVING doc_count >= 2
+                ORDER BY total_weight DESC, doc_count DESC
+                LIMIT 10
+            """))
+            
+            topics = []
+            for row in result.fetchall():
+                term = row[0]
+                count = int(row[1])
+                # 过滤单字和纯数字
+                if len(term) >= 2 and not term.isdigit():
+                    topics.append({
+                        "name": term,
+                        "count": count
+                    })
+            
+            # 如果没有中文话题，尝试查询英文
+            if not topics:
+                result = conn.execute(text("""
+                    SELECT 
+                        ii.term,
+                        COUNT(DISTINCT ii.news_id) as doc_count,
+                        SUM(ii.tf_weight) as total_weight
+                    FROM inverted_index ii
+                    JOIN news n ON ii.news_id = n.news_id
+                    WHERE n.created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR)
+                      AND ii.language = 'en'
+                      AND LENGTH(ii.term) >= 3
+                    GROUP BY ii.term
+                    HAVING doc_count >= 2
+                    ORDER BY total_weight DESC, doc_count DESC
+                    LIMIT 10
+                """))
+                
+                for row in result.fetchall():
+                    term = row[0]
+                    count = int(row[1])
+                    if len(term) >= 3:
+                        topics.append({
+                            "name": term,
+                            "count": count
+                        })
+            
+            return jsonify(topics)
+    except Exception as e:
+        print(f"[API Error] get_hot_topics: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+# 来源类型到颜色的映射
+SOURCE_TYPE_COLORS = {
+    'rss': '#3498db',      # 蓝色
+    'api': '#2ecc71',      # 绿色
+    'crawler': '#e74c3c',  # 红色
+}
+
+# 可信度评分到颜色的映射
+def get_reliability_color(score):
+    """根据可信度评分返回颜色"""
+    if score >= 9:
+        return '#27ae60'  # 深绿 - 极高可信度
+    elif score >= 7:
+        return '#2ecc71'  # 绿色 - 高可信度
+    elif score >= 5:
+        return '#f39c12'  # 橙色 - 中等可信度
+    else:
+        return '#e74c3c'  # 红色 - 低可信度
+
+
+@app.route('/api/sources', methods=['GET'])
+def get_sources():
+    """
+    获取所有新闻来源
+    返回格式: [{"name": "36氪", "logo": "36", "color": "#3498db", "type": "rss"}, ...]
+    """
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT 
+                    source_name,
+                    source_type,
+                    reliability_score
+                FROM sources
+                ORDER BY source_id ASC
+            """))
+            
+            sources = []
+            for row in result.fetchall():
+                name = row[0]
+                source_type = row[1]
+                reliability = row[2] or 5
+                
+                # 生成 logo（取前1-2个字符）
+                logo = name[:2] if len(name) >= 2 else name[:1]
+                
+                # 根据类型选择颜色，或根据可信度
+                if source_type in SOURCE_TYPE_COLORS:
+                    color = SOURCE_TYPE_COLORS[source_type]
+                else:
+                    color = get_reliability_color(reliability)
+                
+                sources.append({
+                    "name": name,
+                    "logo": logo,
+                    "color": color,
+                    "type": source_type
+                })
+            
+            return jsonify(sources)
+    except Exception as e:
+        print(f"[API Error] get_sources: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/news/<int:news_id>', methods=['GET'])
+def get_news_detail(news_id):
+    """
+    获取单条新闻详情（含图片、视频）
+    返回格式: {
+        "id": 123,
+        "title": "新闻标题",
+        "summary": "摘要",
+        "content": "正文内容",
+        "published_at": "2024-01-15 10:30:00",
+        "source_name": "新华网",
+        "source_url": "http://...",
+        "country_code": "CN",
+        "country_name": "中国",
+        "images": [{"url": "...", "caption": "..."}],
+        "videos": [{"url": "...", "type": "mp4"}]
+    }
+    """
+    try:
+        with engine.connect() as conn:
+            # 获取新闻基本信息
+            news_result = conn.execute(text("""
+                SELECT 
+                    n.news_id,
+                    n.title,
+                    n.summary,
+                    n.content,
+                    n.published_at,
+                    n.source_url,
+                    s.source_name,
+                    nc.country_code,
+                    c.country_name
+                FROM news n
+                LEFT JOIN sources s ON n.source_id = s.source_id
+                LEFT JOIN news_countries nc ON n.news_id = nc.news_id AND nc.is_primary = TRUE
+                LEFT JOIN countries c ON nc.country_code = c.country_code
+                WHERE n.news_id = :news_id
+                LIMIT 1
+            """), {'news_id': news_id})
+            
+            row = news_result.fetchone()
+            if not row:
+                return jsonify({"error": "News not found"}), 404
+            
+            # 构建新闻数据
+            news_data = {
+                "id": row[0],
+                "title": row[1],
+                "summary": row[2],
+                "content": row[3] or row[2] or "",
+                "published_at": row[4].strftime('%Y-%m-%d %H:%M:%S') if row[4] else None,
+                "source_url": row[5],
+                "source_name": row[6] or "未知来源",
+                "country_code": row[7],
+                "country_name": row[8]
+            }
+            
+            # 获取图片
+            images_result = conn.execute(text("""
+                SELECT media_url, is_cover, width, height
+                FROM media
+                WHERE news_id = :news_id AND media_type = 'image'
+                ORDER BY is_cover DESC, media_id ASC
+            """), {'news_id': news_id})
+            
+            images = []
+            for img_row in images_result.fetchall():
+                images.append({
+                    "url": img_row[0],
+                    "is_cover": bool(img_row[1]),
+                    "width": img_row[2],
+                    "height": img_row[3]
+                })
+            news_data["images"] = images
+            
+            # 获取视频
+            videos_result = conn.execute(text("""
+                SELECT media_url, media_type
+                FROM media
+                WHERE news_id = :news_id AND media_type = 'video'
+                ORDER BY media_id ASC
+            """), {'news_id': news_id})
+            
+            videos = []
+            for vid_row in videos_result.fetchall():
+                url = vid_row[0]
+                # 判断视频类型
+                video_type = "mp4"
+                if '.m3u8' in url.lower():
+                    video_type = "hls"
+                elif 'youtube' in url.lower() or 'youtu.be' in url.lower():
+                    video_type = "youtube"
+                elif 'bilibili' in url.lower():
+                    video_type = "bilibili"
+                elif 'player' in url.lower() or 'embed' in url.lower():
+                    video_type = "embed"
+                
+                videos.append({
+                    "url": url,
+                    "type": video_type
+                })
+            news_data["videos"] = videos
+            
+            return jsonify(news_data)
+    except Exception as e:
+        print(f"[API Error] get_news_detail: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+def create_app():
+    """创建 Flask 应用实例（供外部调用）"""
+    return app
+
 
 if __name__ == '__main__':
     # 生产环境使用gunicorn: gunicorn -w 4 -b 0.0.0.0:5000 xml_api:app

@@ -115,6 +115,11 @@ export default function Search() {
   const handleBack = () => {
     navigate('/');
   };
+
+  // 点击新闻跳转到详情页
+  const handleNewsClick = (newsId) => {
+    navigate(`/news/${newsId}`);
+  };
   
   // 搜索提示
   const searchTips = [
@@ -270,7 +275,7 @@ export default function Search() {
                       country={news.country}
                       time={news.time}
                       index={index}
-                      onClick={() => console.log('News clicked:', news.id)}
+                      onClick={() => handleNewsClick(news.id)}
                     />
                   ))}
                 </div>

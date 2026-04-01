@@ -9,7 +9,7 @@ import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, TrendingUp, Globe, Tag } from 'lucide-react';
 import Earth3D from '../components/Earth3D';
 import NewsCard from '../components/NewsCard';
-import { searchNews, getCountryStats } from '../utils/api';
+import { searchNews, getCountryStatsFromAPI, getHotTopics } from '../utils/api';
 import { countryCoords, getHeatmapColor } from '../utils/countryCoords';
 
 export default function Visual() {
@@ -18,23 +18,34 @@ export default function Visual() {
   const [heatmapData, setHeatmapData] = useState({});
   const [newsList, setNewsList] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [hotTopics, setHotTopics] = useState([
-    { name: '人工智能', count: 156 },
-    { name: '气候变化', count: 132 },
-    { name: '经济发展', count: 128 },
-    { name: '国际关系', count: 98 },
-    { name: '科技创新', count: 87 },
-  ]);
+  const [hotTopics, setHotTopics] = useState([]);
+  const [dataLoading, setDataLoading] = useState(true);
   
-  // 加载热力图数据
+  // 加载热力图数据和热门话题
   useEffect(() => {
-    loadHeatmapData();
+    loadData();
   }, []);
   
-  // 加载热力图数据
-  const loadHeatmapData = async () => {
-    const stats = await getCountryStats();
-    setHeatmapData(stats);
+  // 加载数据
+  const loadData = async () => {
+    setDataLoading(true);
+    try {
+      // 并行获取热力图数据和热门话题
+      const [stats, topics] = await Promise.all([
+        getCountryStatsFromAPI(),
+        getHotTopics()
+      ]);
+      
+      setHeatmapData(stats);
+      setHotTopics(topics);
+      
+      console.log('[Visual] 热力图数据:', stats);
+      console.log('[Visual] 热门话题:', topics);
+    } catch (error) {
+      console.error('Load data error:', error);
+    } finally {
+      setDataLoading(false);
+    }
   };
   
   // 处理国家点击
@@ -68,6 +79,11 @@ export default function Visual() {
   // 返回主页
   const handleBack = () => {
     navigate('/');
+  };
+
+  // 点击新闻跳转到详情页
+  const handleNewsClick = (newsId) => {
+    navigate(`/news/${newsId}`);
   };
   
   // 获取地区热度排行
@@ -140,6 +156,18 @@ export default function Visual() {
             </p>
           </motion.div>
           
+          {/* 数据加载指示器 */}
+          {dataLoading && (
+            <motion.div 
+              className="flex items-center justify-center py-4 mb-4"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+            >
+              <div className="w-6 h-6 border-2 border-[#00d4ff] border-t-transparent rounded-full animate-spin mr-2" />
+              <span className="text-white/60 text-sm">加载数据中...</span>
+            </motion.div>
+          )}
+          
           {/* 内容区域 */}
           <div className="flex-1 overflow-y-auto custom-scrollbar space-y-6">
             {/* 话题热度排行 */}
@@ -153,21 +181,25 @@ export default function Visual() {
                 热门话题
               </h3>
               <div className="flex flex-wrap gap-2">
-                {hotTopics.map((topic, index) => (
-                  <motion.button
-                    key={topic.name}
-                    className="px-3 py-1.5 rounded-full glass text-sm text-white/70 hover:text-white hover:border-[#00d4ff]/50 transition-all"
-                    onClick={() => handleTopicClick(topic.name)}
-                    initial={{ opacity: 0, scale: 0.8 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    transition={{ delay: 0.6 + index * 0.05, duration: 0.3 }}
-                    whileHover={{ scale: 1.05 }}
-                    whileTap={{ scale: 0.95 }}
-                  >
-                    {topic.name}
-                    <span className="ml-2 text-[#00d4ff]">{topic.count}</span>
-                  </motion.button>
-                ))}
+                {hotTopics.length > 0 ? (
+                  hotTopics.map((topic, index) => (
+                    <motion.button
+                      key={topic.name}
+                      className="px-3 py-1.5 rounded-full glass text-sm text-white/70 hover:text-white hover:border-[#00d4ff]/50 transition-all"
+                      onClick={() => handleTopicClick(topic.name)}
+                      initial={{ opacity: 0, scale: 0.8 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      transition={{ delay: 0.6 + index * 0.05, duration: 0.3 }}
+                      whileHover={{ scale: 1.05 }}
+                      whileTap={{ scale: 0.95 }}
+                    >
+                      {topic.name}
+                      <span className="ml-2 text-[#00d4ff]">{topic.count}</span>
+                    </motion.button>
+                  ))
+                ) : (
+                  <span className="text-white/40 text-sm">暂无热门话题数据</span>
+                )}
               </div>
             </motion.section>
             
@@ -182,33 +214,39 @@ export default function Visual() {
                 地区热度
               </h3>
               <div className="space-y-2">
-                {getRegionRanking().map((item, index) => (
-                  <motion.div
-                    key={item.code}
-                    className={`flex items-center justify-between p-3 rounded-lg glass cursor-pointer transition-all ${
-                      selectedCountry === item.code 
-                        ? 'border-[#00d4ff]/50 bg-[#00d4ff]/10' 
-                        : 'hover:bg-white/5'
-                    }`}
-                    onClick={() => handleCountryClick(item.code)}
-                    initial={{ opacity: 0, x: 20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: 0.7 + index * 0.05, duration: 0.3 }}
-                    whileHover={{ scale: 1.02 }}
-                  >
-                    <div className="flex items-center gap-3">
-                      <span className="text-2xl">{item.info.emoji}</span>
-                      <span className="text-white/80">{item.info.name}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <div 
-                        className="w-3 h-3 rounded-full"
-                        style={{ backgroundColor: getHeatmapColor(item.count, 50) }}
-                      />
-                      <span className="text-[#00d4ff] font-medium">{item.count}</span>
-                    </div>
-                  </motion.div>
-                ))}
+                {getRegionRanking().length > 0 ? (
+                  getRegionRanking().map((item, index) => (
+                    <motion.div
+                      key={item.code}
+                      className={`flex items-center justify-between p-3 rounded-lg glass cursor-pointer transition-all ${
+                        selectedCountry === item.code 
+                          ? 'border-[#00d4ff]/50 bg-[#00d4ff]/10' 
+                          : 'hover:bg-white/5'
+                      }`}
+                      onClick={() => handleCountryClick(item.code)}
+                      initial={{ opacity: 0, x: 20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ delay: 0.7 + index * 0.05, duration: 0.3 }}
+                      whileHover={{ scale: 1.02 }}
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className="text-2xl">{item.info.emoji}</span>
+                        <span className="text-white/80">{item.info.name}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div 
+                          className="w-3 h-3 rounded-full"
+                          style={{ backgroundColor: getHeatmapColor(item.count, 50) }}
+                        />
+                        <span className="text-[#00d4ff] font-medium">{item.count}</span>
+                      </div>
+                    </motion.div>
+                  ))
+                ) : (
+                  <div className="text-white/40 text-sm py-4 text-center">
+                    暂无地区热度数据
+                  </div>
+                )}
               </div>
             </motion.section>
             
@@ -239,7 +277,7 @@ export default function Visual() {
                       country={news.country}
                       time={news.time}
                       index={index}
-                      onClick={() => console.log('News clicked:', news.id)}
+                      onClick={() => handleNewsClick(news.id)}
                     />
                   ))}
                 </div>

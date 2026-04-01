@@ -12,6 +12,7 @@ import Home from './pages/Home';
 import Visual from './pages/Visual';
 import Search from './pages/Search';
 import About from './pages/About';
+import NewsDetail from './pages/NewsDetail';
 
 function App() {
   return (
@@ -25,6 +26,7 @@ function App() {
         <Route path="/visual" element={<Visual />} />
         <Route path="/search" element={<Search />} />
         <Route path="/about" element={<About />} />
+        <Route path="/news/:id" element={<NewsDetail />} />
       </Routes>
     </Router>
   );

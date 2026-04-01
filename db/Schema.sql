@@ -1,5 +1,4 @@
 -- QuickNews - 完整Schema脚本
--- MySQL 8.0+ TiDB Cloud
 -- utf8mb4（支持中文及Emoji）
 
 -- 创建数据库（如果残存测试表，删除测试表）
@@ -162,7 +161,7 @@ CREATE TABLE IF NOT EXISTS inverted_index (
     term VARCHAR(100) NOT NULL COMMENT '词项（分词后的单词或n-gram）',
     news_id BIGINT NOT NULL COMMENT '新闻ID',
     tf_weight FLOAT DEFAULT 1.0 COMMENT '词频权重（TF值）',
-    xpath_path VARCHAR(50) DEFAULT '/news/content' COMMENT '【新增】XML路径：/title, /content, /summary',
+    xpath_path VARCHAR(50) DEFAULT '/news/content' COMMENT 'XML路径：/title, /content, /summary',
     field_type ENUM('title','content','summary') DEFAULT 'content' COMMENT '字段类型（冗余，兼容旧代码）',
     language CHAR(2) DEFAULT 'zh' COMMENT '【新增】词项语言：zh/en',
     position INT UNSIGNED DEFAULT 0 COMMENT '【新增】词项在文档中的位置（用于短语查询）',
@@ -506,7 +505,11 @@ INSERT INTO sources (source_name, source_url, source_type, language, reliability
 ('环球时报', 'https://www.globaltimes.cn/', 'crawler', 'zh', 7),
 ('ScienceDaily', 'https://www.sciencedaily.com/news/', 'crawler', 'en', 8),
 ('俄罗斯卫星通讯社', 'https://sputniknews.cn/', 'crawler', 'zh', 7),
-('纽约时报中文版', 'https://cn.nytimes.com/', 'crawler', 'zh', 8);
+('纽约时报中文版', 'https://cn.nytimes.com/', 'crawler', 'zh', 8),
+('BBC', 'https://www.bbc.com/news', 'crawler', 'en', 8),
+('华尔街日报-中文', 'https://cn.wsj.com/', 'crawler', 'zh', 8),
+('华尔街日报-视频', 'https://www.wsj.com/video/', 'crawler', 'en', 8),
+('路透社-视频', 'https://www.reuters.com/video/', 'crawler', 'en', 8);
 
 
 -- ============================================================
@@ -750,22 +753,317 @@ proc_main: BEGIN
     -- 国家识别逻辑（保持原有）
     SET v_full_text = CONCAT(IFNULL(p_title, ''), ' ', LEFT(IFNULL(p_content, ''), 1000));
 
-    IF v_full_text LIKE '%中国%' OR v_full_text LIKE '%北京%' OR v_full_text LIKE '%上海%' THEN
+    IF v_full_text LIKE '%中国%' OR v_full_text LIKE '%北京%' OR v_full_text LIKE '%上海%'
+        OR v_full_text LIKE '%China%' OR v_full_text LIKE '%Beijing%' OR v_full_text LIKE '%Shanghai%' OR v_full_text LIKE '%台湾%'
+        OR v_full_text LIKE '%香港%' OR v_full_text LIKE '%澳门%' OR v_full_text LIKE '%Taiwan%' OR v_full_text LIKE '%HK%' THEN
         SET v_country_code = 'CN';
-    ELSEIF v_full_text LIKE '%美国%' OR v_full_text LIKE '%华盛顿%' OR v_full_text LIKE '%纽约%' THEN
+    ELSEIF v_full_text LIKE '%美国%' OR v_full_text LIKE '%华盛顿%' OR v_full_text LIKE '%纽约%' OR v_full_text LIKE '%USA%'
+        OR v_full_text LIKE '%United States%' OR v_full_text LIKE '%CIA%' OR v_full_text LIKE '%美军%' OR v_full_text LIKE '%USA%'
+        OR v_full_text LIKE '%Trump%' THEN
         SET v_country_code = 'US';
-    ELSEIF v_full_text LIKE '%日本%' OR v_full_text LIKE '%东京%' THEN
+    ELSEIF v_full_text LIKE '%日本%' OR v_full_text LIKE '%东京%' OR v_full_text LIKE '%Japan%' OR v_full_text LIKE '%Tokyo%' THEN
         SET v_country_code = 'JP';
-    ELSEIF v_full_text LIKE '%英国%' OR v_full_text LIKE '%伦敦%' THEN
+    ELSEIF v_full_text LIKE '%英国%' OR v_full_text LIKE '%伦敦%' OR v_full_text LIKE '%UK%' OR v_full_text LIKE '%United Kingdom%'
+        OR v_full_text LIKE '%Britain%' THEN
         SET v_country_code = 'GB';
-    ELSEIF v_full_text LIKE '%俄罗斯%' OR v_full_text LIKE '%莫斯科%' THEN
+    ELSEIF v_full_text LIKE '%俄罗斯%' OR v_full_text LIKE '%莫斯科%' OR v_full_text LIKE '%俄军%' OR v_full_text LIKE '%Russia%'
+        OR v_full_text LIKE '%Moscow%' THEN
         SET v_country_code = 'RU';
-    ELSEIF v_full_text LIKE '%India%' OR v_full_text LIKE '%Delhi%' OR v_full_text LIKE '%Mumbai%' THEN
+    ELSEIF v_full_text LIKE '%印度%' OR v_full_text LIKE '%新德里%' OR v_full_text LIKE '%孟买%' OR v_full_text LIKE '%India%'
+        OR v_full_text LIKE '%Delhi%' OR v_full_text LIKE '%Mumbai%' THEN
         SET v_country_code = 'IN';
-    ELSEIF v_full_text LIKE '%France%' OR v_full_text LIKE '%Paris%' THEN
+    ELSEIF v_full_text LIKE '%法国%' OR v_full_text LIKE '%巴黎%' OR v_full_text LIKE '%France%' OR v_full_text LIKE '%Paris%' THEN
         SET v_country_code = 'FR';
-    ELSEIF v_full_text LIKE '%Germany%' OR v_full_text LIKE '%Berlin%' THEN
+    ELSEIF v_full_text LIKE '%德国%' OR v_full_text LIKE '%柏林%' OR v_full_text LIKE '%Germany%' OR v_full_text LIKE '%Berlin%' THEN
         SET v_country_code = 'DE';
+
+    -- 亚洲主要国家
+    ELSEIF v_full_text LIKE '%韩国%' OR v_full_text LIKE '%首尔%' OR v_full_text LIKE '%Korea%' OR v_full_text LIKE '%Seoul%' THEN
+        SET v_country_code = 'KR';
+    ELSEIF v_full_text LIKE '%朝鲜%' OR v_full_text LIKE '%平壤%' OR v_full_text LIKE '%Pyongyang%' THEN
+        SET v_country_code = 'KP';
+    ELSEIF v_full_text LIKE '%印度尼西亚%' OR v_full_text LIKE '%印尼%' OR v_full_text LIKE '%雅加达%' OR v_full_text LIKE '%Indonesia%'
+        OR v_full_text LIKE '%Jakarta%' OR v_full_text LIKE '%爪哇%' OR v_full_text LIKE '%苏门答腊%' THEN
+        SET v_country_code = 'ID';
+    ELSEIF v_full_text LIKE '%泰国%' OR v_full_text LIKE '%曼谷%' OR v_full_text LIKE '%Thailand%' OR v_full_text LIKE '%Bangkok%' THEN
+        SET v_country_code = 'TH';
+    ELSEIF v_full_text LIKE '%越南%' OR v_full_text LIKE '%河内%' OR v_full_text LIKE '%胡志明%' OR v_full_text LIKE '%Vietnam%'
+        OR v_full_text LIKE '%Hanoi%' THEN
+        SET v_country_code = 'VN';
+    ELSEIF v_full_text LIKE '%菲律宾%' OR v_full_text LIKE '%马尼拉%' OR v_full_text LIKE '%Philippines%' OR v_full_text LIKE '%Manila%' THEN
+        SET v_country_code = 'PH';
+    ELSEIF v_full_text LIKE '%马来西亚%' OR v_full_text LIKE '%吉隆坡%' OR v_full_text LIKE '%Malaysia%' OR v_full_text LIKE '%Kuala Lumpur%'
+        OR v_full_text LIKE '%马六甲%' OR v_full_text LIKE '%槟城%' THEN
+        SET v_country_code = 'MY';
+    ELSEIF v_full_text LIKE '%新加坡%' OR v_full_text LIKE '%Singapore%' THEN
+        SET v_country_code = 'SG';
+    ELSEIF v_full_text LIKE '%缅甸%' OR v_full_text LIKE '%仰光%' OR v_full_text LIKE '%Myanmar%' OR v_full_text LIKE '%Burma%' THEN
+        SET v_country_code = 'MM';
+    ELSEIF v_full_text LIKE '%柬埔寨%' OR v_full_text LIKE '%金边%' OR v_full_text LIKE '%Cambodia%' OR v_full_text LIKE '%Phnom Penh%' THEN
+        SET v_country_code = 'KH';
+    ELSEIF v_full_text LIKE '%老挝%' OR v_full_text LIKE '%万象%' OR v_full_text LIKE '%Laos%' OR v_full_text LIKE '%Vientiane%' THEN
+        SET v_country_code = 'LA';
+    ELSEIF v_full_text LIKE '%巴基斯坦%' OR v_full_text LIKE '%伊斯兰堡%' OR v_full_text LIKE '%Pakistan%' OR v_full_text LIKE '%Islamabad%' THEN
+        SET v_country_code = 'PK';
+    ELSEIF v_full_text LIKE '%孟加拉国%' OR v_full_text LIKE '%达卡%' OR v_full_text LIKE '%Bangladesh%' OR v_full_text LIKE '%Dhaka%' THEN
+        SET v_country_code = 'BD';
+    ELSEIF v_full_text LIKE '%斯里兰卡%' OR v_full_text LIKE '%科伦坡%' OR v_full_text LIKE '%Sri Lanka%' THEN
+        SET v_country_code = 'LK';
+    ELSEIF v_full_text LIKE '%尼泊尔%' OR v_full_text LIKE '%加德满都%' OR v_full_text LIKE '%Nepal%' OR v_full_text LIKE '%Kathmandu%' THEN
+        SET v_country_code = 'NP';
+    ELSEIF v_full_text LIKE '%蒙古%' OR v_full_text LIKE '%乌兰巴托%' OR v_full_text LIKE '%Mongolia%' OR v_full_text LIKE '%Ulaanbaatar%' THEN
+        SET v_country_code = 'MN';
+    ELSEIF v_full_text LIKE '%哈萨克斯坦%' OR v_full_text LIKE '%努尔苏丹%' OR v_full_text LIKE '%阿斯塔纳%' OR v_full_text LIKE '%Kazakhstan%' THEN
+        SET v_country_code = 'KZ';
+    ELSEIF v_full_text LIKE '%乌兹别克斯坦%' OR v_full_text LIKE '%塔什干%' OR v_full_text LIKE '%Uzbekistan%' OR v_full_text LIKE '%Tashkent%' THEN
+        SET v_country_code = 'UZ';
+    ELSEIF v_full_text LIKE '%吉尔吉斯斯坦%' OR v_full_text LIKE '%比什凯克%' OR v_full_text LIKE '%Kyrgyzstan%' THEN
+        SET v_country_code = 'KG';
+    ELSEIF v_full_text LIKE '%塔吉克斯坦%' OR v_full_text LIKE '%杜尚别%' OR v_full_text LIKE '%Tajikistan%' THEN
+        SET v_country_code = 'TJ';
+    ELSEIF v_full_text LIKE '%土库曼斯坦%' OR v_full_text LIKE '%阿什哈巴德%' OR v_full_text LIKE '%Turkmenistan%' THEN
+        SET v_country_code = 'TM';
+    ELSEIF v_full_text LIKE '%阿塞拜疆%' OR v_full_text LIKE '%巴库%' OR v_full_text LIKE '%Azerbaijan%' OR v_full_text LIKE '%Baku%' THEN
+        SET v_country_code = 'AZ';
+    ELSEIF v_full_text LIKE '%格鲁吉亚%' OR v_full_text LIKE '%第比利斯%' OR v_full_text LIKE '%Georgia%' OR v_full_text LIKE '%Tbilisi%' THEN
+        SET v_country_code = 'GE';
+    ELSEIF v_full_text LIKE '%亚美尼亚%' OR v_full_text LIKE '%埃里温%' OR v_full_text LIKE '%Armenia%' OR v_full_text LIKE '%Yerevan%' THEN
+        SET v_country_code = 'AM';
+
+    -- 中东地区
+    ELSEIF v_full_text LIKE '%以色列%' OR v_full_text LIKE '%耶路撒冷%' OR v_full_text LIKE '%特拉维夫%' OR v_full_text LIKE '%Israel%' OR v_full_text LIKE '%Jerusalem%' THEN
+        SET v_country_code = 'IL';
+    ELSEIF v_full_text LIKE '%伊朗%' OR v_full_text LIKE '%德黑兰%' OR v_full_text LIKE '%Iran%' OR v_full_text LIKE '%Tehran%'
+        OR v_full_text LIKE '%IRGC%' OR v_full_text LIKE '%革命卫队%' OR v_full_text LIKE '%最高领袖%' THEN
+        SET v_country_code = 'IR';
+    ELSEIF v_full_text LIKE '%土耳其%' OR v_full_text LIKE '%安卡拉%' OR v_full_text LIKE '%伊斯坦布尔%' OR v_full_text LIKE '%Turkey%'
+        OR v_full_text LIKE '%Istanbul%' THEN
+        SET v_country_code = 'TR';
+    ELSEIF v_full_text LIKE '%沙特%' OR v_full_text LIKE '%利雅得%' OR v_full_text LIKE '%吉达%' OR v_full_text LIKE '%Saudi%'
+        OR v_full_text LIKE '%Riyadh%' THEN
+        SET v_country_code = 'SA';
+    ELSEIF v_full_text LIKE '%阿联酋%' OR v_full_text LIKE '%迪拜%' OR v_full_text LIKE '%阿布扎比%' OR v_full_text LIKE '%Dubai%' THEN
+        SET v_country_code = 'AE';
+    ELSEIF v_full_text LIKE '%卡塔尔%' OR v_full_text LIKE '%多哈%' OR v_full_text LIKE '%Qatar%' OR v_full_text LIKE '%Doha%' THEN
+        SET v_country_code = 'QA';
+    ELSEIF v_full_text LIKE '%科威特%' OR v_full_text LIKE '%Kuwait%' THEN
+        SET v_country_code = 'KW';
+    ELSEIF v_full_text LIKE '%阿曼%' OR v_full_text LIKE '%马斯喀特%' OR v_full_text LIKE '%Oman%' OR v_full_text LIKE '%Muscat%' THEN
+        SET v_country_code = 'OM';
+    ELSEIF v_full_text LIKE '%巴林%' OR v_full_text LIKE '%麦纳麦%' OR v_full_text LIKE '%Bahrain%' THEN
+        SET v_country_code = 'BH';
+    ELSEIF v_full_text LIKE '%伊拉克%' OR v_full_text LIKE '%巴格达%' OR v_full_text LIKE '%Iraq%' OR v_full_text LIKE '%Baghdad%'
+        OR v_full_text LIKE '%库尔德%' THEN
+        SET v_country_code = 'IQ';
+    ELSEIF v_full_text LIKE '%叙利亚%' OR v_full_text LIKE '%大马士革%' OR v_full_text LIKE '%Syria%' OR v_full_text LIKE '%Damascus%' THEN
+        SET v_country_code = 'SY';
+    ELSEIF v_full_text LIKE '%约旦%' OR v_full_text LIKE '%安曼%' OR v_full_text LIKE '%Jordan%' OR v_full_text LIKE '%Amman%' THEN
+        SET v_country_code = 'JO';
+    ELSEIF v_full_text LIKE '%黎巴嫩%' OR v_full_text LIKE '%贝鲁特%' OR v_full_text LIKE '%Lebanon%' OR v_full_text LIKE '%Beirut%' THEN
+        SET v_country_code = 'LB';
+    ELSEIF v_full_text LIKE '%也门%' OR v_full_text LIKE '%萨那%' OR v_full_text LIKE '%Yemen%' OR v_full_text LIKE '%Sanaa%'
+        OR v_full_text LIKE '%胡塞%' OR v_full_text LIKE '%曼德海峡%' THEN
+        SET v_country_code = 'YE';
+    ELSEIF v_full_text LIKE '%阿富汗%' OR v_full_text LIKE '%喀布尔%' OR v_full_text LIKE '%塔利班%' OR v_full_text LIKE '%Afghanistan%'
+        OR v_full_text LIKE '%Kabul%' OR v_full_text LIKE '%Taliban%'THEN
+        SET v_country_code = 'AF';
+
+    -- 欧洲主要国家
+    ELSEIF v_full_text LIKE '%意大利%' OR v_full_text LIKE '%罗马%' OR v_full_text LIKE '%米兰%' OR v_full_text LIKE '%Italy%'
+        OR v_full_text LIKE '%Rome%' OR v_full_text LIKE '%Milan%' THEN
+        SET v_country_code = 'IT';
+    ELSEIF v_full_text LIKE '%西班牙%' OR v_full_text LIKE '%马德里%' OR v_full_text LIKE '%巴塞罗那%' OR v_full_text LIKE '%Spain%'
+        OR v_full_text LIKE '%Madrid%' THEN
+        SET v_country_code = 'ES';
+    ELSEIF v_full_text LIKE '%葡萄牙%' OR v_full_text LIKE '%里斯本%' OR v_full_text LIKE '%Portugal%' OR v_full_text LIKE '%Lisbon%' THEN
+        SET v_country_code = 'PT';
+    ELSEIF v_full_text LIKE '%乌克兰%' OR v_full_text LIKE '%基辅%' OR v_full_text LIKE '%顿涅茨克%' OR v_full_text LIKE '%卢甘茨克%'
+        OR v_full_text LIKE '%Ukraine%' OR v_full_text LIKE '%Kyiv%' OR v_full_text LIKE '%Kiev%' THEN
+        SET v_country_code = 'UA';
+    ELSEIF v_full_text LIKE '%波兰%' OR v_full_text LIKE '%华沙%' OR v_full_text LIKE '%Poland%' OR v_full_text LIKE '%Warsaw%' THEN
+        SET v_country_code = 'PL';
+    ELSEIF v_full_text LIKE '%罗马尼亚%' OR v_full_text LIKE '%布加勒斯特%' OR v_full_text LIKE '%Romania%' OR v_full_text LIKE '%Bucharest%' THEN
+        SET v_country_code = 'RO';
+    ELSEIF v_full_text LIKE '%荷兰%' OR v_full_text LIKE '%阿姆斯特丹%' OR v_full_text LIKE '%Netherlands%' OR v_full_text LIKE '%Holland%'
+        OR v_full_text LIKE '%Amsterdam%' THEN
+        SET v_country_code = 'NL';
+    ELSEIF v_full_text LIKE '%比利时%' OR v_full_text LIKE '%布鲁塞尔%' OR v_full_text LIKE '%Belgium%' OR v_full_text LIKE '%Brussels%' THEN
+        SET v_country_code = 'BE';
+    ELSEIF v_full_text LIKE '%瑞士%' OR v_full_text LIKE '%日内瓦%' OR v_full_text LIKE '%苏黎世%' OR v_full_text LIKE '%Switzerland%'
+        OR v_full_text LIKE '%Geneva%' OR v_full_text LIKE '%Zurich%' THEN
+        SET v_country_code = 'CH';
+    ELSEIF v_full_text LIKE '%瑞典%' OR v_full_text LIKE '%斯德哥尔摩%' OR v_full_text LIKE '%Sweden%' OR v_full_text LIKE '%Stockholm%' THEN
+        SET v_country_code = 'SE';
+    ELSEIF v_full_text LIKE '%挪威%' OR v_full_text LIKE '%奥斯陆%' OR v_full_text LIKE '%Norway%' OR v_full_text LIKE '%Oslo%' THEN
+        SET v_country_code = 'NO';
+    ELSEIF v_full_text LIKE '%丹麦%' OR v_full_text LIKE '%哥本哈根%' OR v_full_text LIKE '%Denmark%' OR v_full_text LIKE '%Copenhagen%' THEN
+        SET v_country_code = 'DK';
+    ELSEIF v_full_text LIKE '%芬兰%' OR v_full_text LIKE '%赫尔辛基%' OR v_full_text LIKE '%Finland%' OR v_full_text LIKE '%Helsinki%' THEN
+        SET v_country_code = 'FI';
+    ELSEIF v_full_text LIKE '%奥地利%' OR v_full_text LIKE '%维也纳%' OR v_full_text LIKE '%Austria%' OR v_full_text LIKE '%Vienna%' THEN
+        SET v_country_code = 'AT';
+    ELSEIF v_full_text LIKE '%捷克%' OR v_full_text LIKE '%布拉格%' OR v_full_text LIKE '%Czech%' OR v_full_text LIKE '%Prague%' THEN
+        SET v_country_code = 'CZ';
+    ELSEIF v_full_text LIKE '%匈牙利%' OR v_full_text LIKE '%布达佩斯%' OR v_full_text LIKE '%Hungary%' OR v_full_text LIKE '%Budapest%' THEN
+        SET v_country_code = 'HU';
+    ELSEIF v_full_text LIKE '%希腊%' OR v_full_text LIKE '%雅典%' OR v_full_text LIKE '%Greece%' OR v_full_text LIKE '%Athens%' THEN
+        SET v_country_code = 'GR';
+    ELSEIF v_full_text LIKE '%白俄罗斯%' OR v_full_text LIKE '%明斯克%' OR v_full_text LIKE '%Belarus%' OR v_full_text LIKE '%Minsk%' THEN
+        SET v_country_code = 'BY';
+    ELSEIF v_full_text LIKE '%塞尔维亚%' OR v_full_text LIKE '%贝尔格莱德%' OR v_full_text LIKE '%Serbia%' OR v_full_text LIKE '%Belgrade%' THEN
+        SET v_country_code = 'RS';
+    ELSEIF v_full_text LIKE '%克罗地亚%' OR v_full_text LIKE '%萨格勒布%' OR v_full_text LIKE '%Croatia%' OR v_full_text LIKE '%Zagreb%' THEN
+        SET v_country_code = 'HR';
+    ELSEIF v_full_text LIKE '%保加利亚%' OR v_full_text LIKE '%索非亚%' OR v_full_text LIKE '%Bulgaria%' OR v_full_text LIKE '%Sofia%' THEN
+        SET v_country_code = 'BG';
+    ELSEIF v_full_text LIKE '%斯洛伐克%' OR v_full_text LIKE '%布拉迪斯拉发%' OR v_full_text LIKE '%Slovakia%' THEN
+        SET v_country_code = 'SK';
+    ELSEIF v_full_text LIKE '%爱尔兰%' OR v_full_text LIKE '%都柏林%' OR v_full_text LIKE '%Ireland%' OR v_full_text LIKE '%Dublin%' THEN
+        SET v_country_code = 'IE';
+    ELSEIF v_full_text LIKE '%冰岛%' OR v_full_text LIKE '%雷克雅未克%' OR v_full_text LIKE '%Iceland%' OR v_full_text LIKE '%Reykjavik%' THEN
+        SET v_country_code = 'IS';
+    ELSEIF v_full_text LIKE '%爱沙尼亚%' OR v_full_text LIKE '%塔林%' OR v_full_text LIKE '%Estonia%' OR v_full_text LIKE '%Tallinn%' THEN
+        SET v_country_code = 'EE';
+    ELSEIF v_full_text LIKE '%拉脱维亚%' OR v_full_text LIKE '%里加%' OR v_full_text LIKE '%Latvia%' OR v_full_text LIKE '%Riga%' THEN
+        SET v_country_code = 'LV';
+    ELSEIF v_full_text LIKE '%立陶宛%' OR v_full_text LIKE '%维尔纽斯%' OR v_full_text LIKE '%Lithuania%' OR v_full_text LIKE '%Vilnius%' THEN
+        SET v_country_code = 'LT';
+    ELSEIF v_full_text LIKE '%摩尔多瓦%' OR v_full_text LIKE '%基希讷乌%' OR v_full_text LIKE '%Moldova%' THEN
+        SET v_country_code = 'MD';
+    ELSEIF v_full_text LIKE '%阿尔巴尼亚%' OR v_full_text LIKE '%地拉那%' OR v_full_text LIKE '%Albania%' OR v_full_text LIKE '%Tirana%' THEN
+        SET v_country_code = 'AL';
+    ELSEIF v_full_text LIKE '%卢森堡%' OR v_full_text LIKE '%Luxembourg%' THEN
+        SET v_country_code = 'LU';
+    ELSEIF v_full_text LIKE '%马耳他%' OR v_full_text LIKE '%Malta%' THEN
+        SET v_country_code = 'MT';
+    ELSEIF v_full_text LIKE '%塞浦路斯%' OR v_full_text LIKE '%尼科西亚%' OR v_full_text LIKE '%Cyprus%' THEN
+        SET v_country_code = 'CY';
+
+    -- 北美洲
+    ELSEIF v_full_text LIKE '%加拿大%' OR v_full_text LIKE '%渥太华%' OR v_full_text LIKE '%多伦多%' OR v_full_text LIKE '%温哥华%'
+        OR v_full_text LIKE '%Canada%' OR v_full_text LIKE '%Ottawa%' OR v_full_text LIKE '%Toronto%' THEN
+        SET v_country_code = 'CA';
+    ELSEIF v_full_text LIKE '%墨西哥%' OR v_full_text LIKE '%墨西哥城%' OR v_full_text LIKE '%Mexico%' OR v_full_text LIKE '%Mexico City%' THEN
+        SET v_country_code = 'MX';
+    ELSEIF v_full_text LIKE '%古巴%' OR v_full_text LIKE '%哈瓦那%' OR v_full_text LIKE '%Cuba%' OR v_full_text LIKE '%Havana%' THEN
+        SET v_country_code = 'CU';
+    ELSEIF v_full_text LIKE '%危地马拉%' OR v_full_text LIKE '%Guatemala%' THEN
+        SET v_country_code = 'GT';
+    ELSEIF v_full_text LIKE '%巴拿马%' OR v_full_text LIKE '%Panama%' THEN
+        SET v_country_code = 'PA';
+    ELSEIF v_full_text LIKE '%哥斯达黎加%' OR v_full_text LIKE '%Costa Rica%' THEN
+        SET v_country_code = 'CR';
+    ELSEIF v_full_text LIKE '%牙买加%' OR v_full_text LIKE '%Jamaica%' THEN
+        SET v_country_code = 'JM';
+    ELSEIF v_full_text LIKE '%海地%' OR v_full_text LIKE '%Haiti%' THEN
+        SET v_country_code = 'HT';
+    ELSEIF v_full_text LIKE '%多米尼加%' OR v_full_text LIKE '%Dominican%' THEN
+        SET v_country_code = 'DO';
+
+    -- 南美洲
+    ELSEIF v_full_text LIKE '%巴西%' OR v_full_text LIKE '%巴西利亚%' OR v_full_text LIKE '%里约%' OR v_full_text LIKE '%圣保罗%'
+        OR v_full_text LIKE '%Brazil%' OR v_full_text LIKE '%Brasilia%' OR v_full_text LIKE '%Rio%' OR v_full_text LIKE '%Sao Paulo%' THEN
+        SET v_country_code = 'BR';
+    ELSEIF v_full_text LIKE '%阿根廷%' OR v_full_text LIKE '%布宜诺斯艾利斯%' OR v_full_text LIKE '%Argentina%' OR v_full_text LIKE '%Buenos Aires%' THEN
+        SET v_country_code = 'AR';
+    ELSEIF v_full_text LIKE '%哥伦比亚%' OR v_full_text LIKE '%波哥大%' OR v_full_text LIKE '%Colombia%' OR v_full_text LIKE '%Bogota%' THEN
+        SET v_country_code = 'CO';
+    ELSEIF v_full_text LIKE '%秘鲁%' OR v_full_text LIKE '%利马%' OR v_full_text LIKE '%Peru%' OR v_full_text LIKE '%Lima%' THEN
+        SET v_country_code = 'PE';
+    ELSEIF v_full_text LIKE '%智利%' OR v_full_text LIKE '%圣地亚哥%' OR v_full_text LIKE '%Chile%' OR v_full_text LIKE '%Santiago%' THEN
+        SET v_country_code = 'CL';
+    ELSEIF v_full_text LIKE '%委内瑞拉%' OR v_full_text LIKE '%加拉加斯%' OR v_full_text LIKE '%Venezuela%' OR v_full_text LIKE '%Caracas%' THEN
+        SET v_country_code = 'VE';
+    ELSEIF v_full_text LIKE '%厄瓜多尔%' OR v_full_text LIKE '%基多%' OR v_full_text LIKE '%Ecuador%' THEN
+        SET v_country_code = 'EC';
+    ELSEIF v_full_text LIKE '%玻利维亚%' OR v_full_text LIKE '%拉巴斯%' OR v_full_text LIKE '%Bolivia%' THEN
+        SET v_country_code = 'BO';
+    ELSEIF v_full_text LIKE '%乌拉圭%' OR v_full_text LIKE '%蒙得维的亚%' OR v_full_text LIKE '%Uruguay%' THEN
+        SET v_country_code = 'UY';
+    ELSEIF v_full_text LIKE '%巴拉圭%' OR v_full_text LIKE '%亚松森%' OR v_full_text LIKE '%Paraguay%' THEN
+        SET v_country_code = 'PY';
+
+    -- 非洲主要国家
+    ELSEIF v_full_text LIKE '%埃及%' OR v_full_text LIKE '%开罗%' OR v_full_text LIKE '%Egypt%' OR v_full_text LIKE '%Cairo%' THEN
+        SET v_country_code = 'EG';
+    ELSEIF v_full_text LIKE '%南非%' OR v_full_text LIKE '%开普敦%' OR v_full_text LIKE '%约翰内斯堡%' OR v_full_text LIKE '%比勒陀利亚%'
+        OR v_full_text LIKE '%South Africa%' OR v_full_text LIKE '%Cape Town%' OR v_full_text LIKE '%Johannesburg%' THEN
+        SET v_country_code = 'ZA';
+    ELSEIF v_full_text LIKE '%尼日利亚%' OR v_full_text LIKE '%阿布贾%' OR v_full_text LIKE '%拉各斯%' OR v_full_text LIKE '%Nigeria%'
+        OR v_full_text LIKE '%Lagos%' THEN
+        SET v_country_code = 'NG';
+    ELSEIF v_full_text LIKE '%肯尼亚%' OR v_full_text LIKE '%内罗毕%' OR v_full_text LIKE '%Kenya%' OR v_full_text LIKE '%Nairobi%' THEN
+        SET v_country_code = 'KE';
+    ELSEIF v_full_text LIKE '%埃塞俄比亚%' OR v_full_text LIKE '%亚的斯亚贝巴%' OR v_full_text LIKE '%Ethiopia%'
+        OR v_full_text LIKE '%Addis Ababa%' THEN
+        SET v_country_code = 'ET';
+    ELSEIF v_full_text LIKE '%加纳%' OR v_full_text LIKE '%阿克拉%' OR v_full_text LIKE '%Ghana%' OR v_full_text LIKE '%Accra%' THEN
+        SET v_country_code = 'GH';
+    ELSEIF v_full_text LIKE '%坦桑尼亚%' OR v_full_text LIKE '%达累斯萨拉姆%' OR v_full_text LIKE '%Tanzania%' THEN
+        SET v_country_code = 'TZ';
+    ELSEIF v_full_text LIKE '%乌干达%' OR v_full_text LIKE '%坎帕拉%' OR v_full_text LIKE '%Uganda%' THEN
+        SET v_country_code = 'UG';
+    ELSEIF v_full_text LIKE '%摩洛哥%' OR v_full_text LIKE '%卡萨布兰卡%' OR v_full_text LIKE '%拉巴特%' OR v_full_text LIKE '%Morocco%'
+        OR v_full_text LIKE '%Casablanca%' THEN
+        SET v_country_code = 'MA';
+    ELSEIF v_full_text LIKE '%阿尔及利亚%' OR v_full_text LIKE '%阿尔及尔%' OR v_full_text LIKE '%Algeria%' THEN
+        SET v_country_code = 'DZ';
+    ELSEIF v_full_text LIKE '%突尼斯%' OR v_full_text LIKE '%Tunisia%' THEN
+        SET v_country_code = 'TN';
+    ELSEIF v_full_text LIKE '%利比亚%' OR v_full_text LIKE '%的黎波里%' OR v_full_text LIKE '%Libya%' THEN
+        SET v_country_code = 'LY';
+    ELSEIF v_full_text LIKE '%苏丹%' OR v_full_text LIKE '%喀土穆%' OR v_full_text LIKE '%Sudan%' THEN
+        SET v_country_code = 'SD';
+    ELSEIF v_full_text LIKE '%安哥拉%' OR v_full_text LIKE '%罗安达%' OR v_full_text LIKE '%Angola%' THEN
+        SET v_country_code = 'AO';
+    ELSEIF v_full_text LIKE '%莫桑比克%' OR v_full_text LIKE '%Mozambique%' THEN
+        SET v_country_code = 'MZ';
+    ELSEIF v_full_text LIKE '%马达加斯加%' OR v_full_text LIKE '%Madagascar%' THEN
+        SET v_country_code = 'MG';
+    ELSEIF v_full_text LIKE '%喀麦隆%' OR v_full_text LIKE '%雅温得%' OR v_full_text LIKE '%Cameroon%' THEN
+        SET v_country_code = 'CM';
+    ELSEIF v_full_text LIKE '%科特迪瓦%' OR v_full_text LIKE '%阿比让%' OR v_full_text LIKE '%Ivory Coast%'
+        OR v_full_text LIKE '%Cote d\Ivoire%' THEN
+        SET v_country_code = 'CI';
+    ELSEIF v_full_text LIKE '%尼日尔%' OR v_full_text LIKE '%尼亚美%' OR v_full_text LIKE '%Niger%' THEN
+        SET v_country_code = 'NE';
+    ELSEIF v_full_text LIKE '%布基纳法索%' OR v_full_text LIKE '%Burkina Faso%' THEN
+        SET v_country_code = 'BF';
+    ELSEIF v_full_text LIKE '%马里%' OR v_full_text LIKE '%巴马科%' OR v_full_text LIKE '%Mali%' THEN
+        SET v_country_code = 'ML';
+    ELSEIF v_full_text LIKE '%赞比亚%' OR v_full_text LIKE '%卢萨卡%' OR v_full_text LIKE '%Zambia%' THEN
+        SET v_country_code = 'ZM';
+    ELSEIF v_full_text LIKE '%津巴布韦%' OR v_full_text LIKE '%哈拉雷%' OR v_full_text LIKE '%Zimbabwe%' THEN
+        SET v_country_code = 'ZW';
+    ELSEIF v_full_text LIKE '%卢旺达%' OR v_full_text LIKE '%基加利%' OR v_full_text LIKE '%Rwanda%' THEN
+        SET v_country_code = 'RW';
+    ELSEIF v_full_text LIKE '%索马里%' OR v_full_text LIKE '%摩加迪沙%' OR v_full_text LIKE '%Somalia%' THEN
+        SET v_country_code = 'SO';
+    ELSEIF v_full_text LIKE '%塞内加尔%' OR v_full_text LIKE '%达喀尔%' OR v_full_text LIKE '%Senegal%' THEN
+        SET v_country_code = 'SN';
+
+    -- 大洋洲
+    ELSEIF v_full_text LIKE '%澳大利亚%' OR v_full_text LIKE '%澳洲%' OR v_full_text LIKE '%堪培拉%' OR v_full_text LIKE '%悉尼%'
+        OR v_full_text LIKE '%墨尔本%' OR v_full_text LIKE '%Australia%' OR v_full_text LIKE '%Canberra%' OR v_full_text LIKE '%Sydney%'
+        OR v_full_text LIKE '%Melbourne%' THEN
+        SET v_country_code = 'AU';
+    ELSEIF v_full_text LIKE '%新西兰%' OR v_full_text LIKE '%惠灵顿%' OR v_full_text LIKE '%奥克兰%' OR v_full_text LIKE '%New Zealand%'
+        OR v_full_text LIKE '%Wellington%' OR v_full_text LIKE '%Auckland%' THEN
+        SET v_country_code = 'NZ';
+    ELSEIF v_full_text LIKE '%巴布亚新几内亚%' OR v_full_text LIKE '%Papua New Guinea%' THEN
+        SET v_country_code = 'PG';
+    ELSEIF v_full_text LIKE '%斐济%' OR v_full_text LIKE '%Fiji%' THEN
+        SET v_country_code = 'FJ';
+
+    -- 特殊地区（依据countries表定义，确保与地理信息一致）
+    ELSEIF v_full_text LIKE '%台湾%' OR v_full_text LIKE '%台北%' OR v_full_text LIKE '%民进党%' OR v_full_text LIKE '%Taiwan%'
+        OR v_full_text LIKE '%Taipei%' THEN
+        SET v_country_code = 'TW';
+    ELSEIF v_full_text LIKE '%香港%' OR v_full_text LIKE '%Hong Kong%' THEN
+        SET v_country_code = 'HK';
+    ELSEIF v_full_text LIKE '%澳门%' OR v_full_text LIKE '%Macau%' OR v_full_text LIKE '%Macao%' THEN
+        SET v_country_code = 'MO';
+    -- 默认值
     ELSE
         SET v_country_code = IFNULL(p_hint_country, 'US');
     END IF;
@@ -777,20 +1075,27 @@ proc_main: BEGIN
     -- 分类识别逻辑
     IF v_full_text LIKE '%科技%' OR v_full_text LIKE '%tech%' OR v_full_text LIKE '%AI%'
        OR v_full_text LIKE '%人工智能%' OR v_full_text LIKE '%芯片%' OR v_full_text LIKE '%technology%'
-       OR v_full_text LIKE '%science%'    OR v_full_text LIKE '%科学%' OR v_full_text LIKE '%机器人%'  THEN
+       OR v_full_text LIKE '%science%'    OR v_full_text LIKE '%科学%' OR v_full_text LIKE '%机器人%'
+       OR v_full_text LIKE '%航天%' OR v_full_text LIKE '%量子%' OR v_full_text LIKE '%中科院%'
+       OR v_full_text LIKE '%aerospace%' OR v_full_text LIKE '%大模型%' OR v_full_text LIKE '%材料%'THEN
         SET v_category_code = 'tech';
     ELSEIF v_full_text LIKE '%政治%' OR v_full_text LIKE '%politic%' OR v_full_text LIKE '%外交%'
            OR v_full_text LIKE '%议会%' OR v_full_text LIKE '%人大%' OR v_full_text LIKE '%政协%'
-           OR v_full_text LIKE '%election%' OR v_full_text LIKE '%总统%' THEN
+           OR v_full_text LIKE '%联合国%' OR v_full_text LIKE '%决议%' OR v_full_text LIKE '%UN%'
+           OR v_full_text LIKE '%election%' OR v_full_text LIKE '%游行%' OR v_full_text LIKE '%法律%'
+           OR v_full_text LIKE '%总理%' OR v_full_text LIKE '%chancellor%'
+           OR v_full_text LIKE '%总统%' OR v_full_text LIKE '%parade%' THEN
         SET v_category_code = 'politics';
     ELSEIF v_full_text LIKE '%经济%' OR v_full_text LIKE '%economy%' OR v_full_text LIKE '%金融%'
            OR v_full_text LIKE '%财政%'   OR v_full_text LIKE '%finance%' OR v_full_text LIKE '%外贸%'
-           OR v_full_text LIKE '%股票%' OR v_full_text LIKE '%GDP%'   OR v_full_text LIKE '%物价%'
+           OR v_full_text LIKE '%股票%' OR v_full_text LIKE '%GDP%'  OR v_full_text LIKE '%物价%'
+           OR v_full_text LIKE '%上市%' OR v_full_text LIKE '%市值%'  OR v_full_text LIKE '%CPI%'
            OR v_full_text LIKE '%trade%' OR v_full_text LIKE '%stock%' THEN
         SET v_category_code = 'economy';
     ELSEIF v_full_text LIKE '%军事%' OR v_full_text LIKE '%military%' OR v_full_text LIKE '%武器%'
            OR v_full_text LIKE '%war%' OR v_full_text LIKE '%航母%' OR v_full_text LIKE '%战机%'
            OR v_full_text LIKE '%conflict%' OR v_full_text LIKE '%冲突%' OR v_full_text LIKE '%战争%'
+           OR v_full_text LIKE '%核武器%' OR v_full_text LIKE '%国防部%'
            OR v_full_text LIKE '%军事基地%'THEN
         SET v_category_code = 'military';
     ELSEIF v_full_text LIKE '%体育%' OR v_full_text LIKE '%sports%' OR v_full_text LIKE '%足球%'
@@ -800,7 +1105,7 @@ proc_main: BEGIN
         SET v_category_code = 'sports';
     ELSEIF v_full_text LIKE '%文化%' OR v_full_text LIKE '%culture%' OR v_full_text LIKE '%文旅%'
            OR v_full_text LIKE '%节日%' OR v_full_text LIKE '%电视剧%'  OR v_full_text LIKE '%电影%'
-           OR v_full_text LIKE '%games%' OR v_full_text LIKE '%游戏%'THEN
+           OR v_full_text LIKE '%games%' OR v_full_text LIKE '%游戏%' THEN
         SET v_category_code = 'culture';
     ELSE
         SET v_category_code = IFNULL(p_hint_category, 'international');
