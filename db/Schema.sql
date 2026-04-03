@@ -491,9 +491,6 @@ INSERT INTO categories (category_name, category_code, color_code, sort_order) VA
 ('军事', 'military', '#9b59b6', 4), -- 紫色
 ('文化', 'culture', '#f39c12', 5),  -- 橙色
 ('体育', 'sports', '#1abc9c', 6),   -- 青色
-('社会', 'society', '#34495e', 7),  -- 深灰
-('国际', 'international', '#e67e22', 8); -- 橙红（综合）
-
 -- E3. 插入实际使用的新闻来源（与爬取代码一致）
 -- NewsAPI来源（固定source为NewsAPI，不提供具体网址）
 INSERT INTO sources (source_name, source_url, source_type, language, reliability_score) VALUES
@@ -1031,7 +1028,7 @@ proc_main: BEGIN
            OR v_full_text LIKE '%missile%' OR v_full_text LIKE '%袭击%' OR v_full_text LIKE '%submarine%'
            OR v_full_text LIKE '%空军%'  OR v_full_text LIKE '%海军陆战队%' OR v_full_text LIKE '%Navy%'
            OR v_full_text LIKE '%battleship%'   OR v_full_text LIKE '%军费%' OR v_full_text LIKE '%征兵%'
-           OR v_full_text LIKE '%军事基地%'THEN
+           OR v_full_text LIKE '%军事基地%' OR v_full_text LIKE '%军队%' THEN
         SET v_category_code = 'military';
     ELSEIF v_full_text LIKE '%体育%' OR v_full_text LIKE '%sports%' OR v_full_text LIKE '%足球%'
            OR v_full_text LIKE '%奥运%' OR v_full_text LIKE '%Olympic%' OR v_full_text LIKE '%羽毛球%'

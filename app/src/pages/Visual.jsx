@@ -78,12 +78,12 @@ export default function Visual() {
   
   // 返回主页
   const handleBack = () => {
-    navigate('/');
+    navigate('/', { state: { fromInternal: true } });
   };
 
   // 点击新闻跳转到详情页
   const handleNewsClick = (newsId) => {
-    navigate(`/news/${newsId}`);
+    navigate(`/news/${newsId}`, { state: { fromInternal: true } });
   };
   
   // 获取地区热度排行

@@ -42,7 +42,7 @@ export default function NewsDetail() {
 
   // 返回上一页
   const handleBack = () => {
-    navigate(-1);
+    navigate(-1, { state: { fromInternal: true } });
   };
 
   // 格式化日期

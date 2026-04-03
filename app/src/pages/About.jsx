@@ -35,7 +35,7 @@ export default function About() {
   
   // 返回主页
   const handleBack = () => {
-    navigate('/');
+    navigate('/', { state: { fromInternal: true } });
   };
   
   // 技术栈数据

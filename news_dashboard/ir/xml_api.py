@@ -1,4 +1,4 @@
-﻿from flask import Flask, request, Response, jsonify
+from flask import Flask, request, Response, jsonify, send_from_directory
 from flask_cors import CORS
 from sqlalchemy import text
 import sys,os
@@ -9,7 +9,10 @@ import re
 import html
 import json
 
-app = Flask(__name__)
+# 静态文件目录（生产环境）
+STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'static')
+
+app = Flask(__name__, static_folder=STATIC_DIR, static_url_path='')
 
 # 配置 CORS，允许前端开发服务器访问
 CORS(app, resources={
@@ -350,7 +353,7 @@ def get_country_stats():
                 FROM news_countries nc
                 JOIN news n ON nc.news_id = n.news_id
                 WHERE n.created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR)
-                  AND nc.is_primary = TRUE        -- ← 只统计主要关联国
+                  AND nc.is_primary = TRUE        -- 只统计主要关联国
                 GROUP BY nc.country_code
                 ORDER BY news_count DESC
             """))
@@ -380,18 +383,149 @@ ZH_STOPWORDS = {
     '一', '二', '三', '四', '五', '六', '七', '八', '九', '十', '百', '千', '万', '亿',
     # 时间相关
     '年', '月', '日', '时', '分', '秒', '周', '星期', '季度',
+    # 【新增】财经术语停用词（避免破碎词组）
+    '同比', '环比', '增长', '下降', '上升', '减少', '增加', '涨幅', '跌幅', '百分点',
+    '净利润', '归母', '归母净', '母净利', '归母利润', '母净利润', '利润总', '利润总额',
+    '营业', '营业收', '业收入', '营业收', '营收', '成本', '费用', '资产', '负债',
+    '股东', '权益', '每股', '收益', '现金流', '流动', '非流动', '负债率',
+    '毛利率', '净利率', '收益率', '回报率', '市盈率', '市净率',
 }
 
 # 英文停用词表（扩展版）
 EN_STOPWORDS = {
-    'the', 'be', 'to', 'of', 'and', 'a', 'in', 'that', 'have', 'i', 'it', 'for', 'not', 'on', 'with', 'he', 'as', 'you', 'do', 'at', 'this', 'but', 'his', 'by', 'from', 'they', 'we', 'say', 'her', 'she', 'or', 'an', 'will', 'my', 'one', 'all', 'would', 'there', 'their', 'what', 'so', 'up', 'out', 'if', 'about', 'who', 'get', 'which', 'go', 'me', 'when', 'make', 'can', 'like', 'time', 'no', 'just', 'him', 'know', 'take', 'people', 'into', 'year', 'your', 'good', 'some', 'could', 'them', 'see', 'other', 'than', 'then', 'now', 'look', 'only', 'come', 'its', 'over', 'think', 'also', 'back', 'after', 'use', 'two', 'how', 'our', 'work', 'first', 'well', 'way', 'even', 'new', 'want', 'because', 'any', 'these', 'give', 'day', 'most', 'us', 'is', 'was', 'are', 'were', 'been', 'has', 'had', 'did', 'does', 'doing', 'done', 'said', 'says', 'saying', 'made', 'making', 'came', 'coming', 'went', 'gone', 'got', 'getting', 'saw', 'seen', 'knew', 'known', 'thinking', 'thought', 'took', 'taken', 'told', 'asking', 'asked', 'working', 'worked', 'felt', 'trying', 'tried', 'left', 'leaving', 'called', 'calling', 'needed', 'needing', 'became', 'become', 'meaning', 'meant', 'kept', 'keeping', 'letting', 'putting', 'bringing', 'brought', 'began', 'begun', 'helped', 'helping', 'showed', 'shown', 'heard', 'hearing', 'played', 'playing', 'ran', 'run', 'running', 'moved', 'moving', 'lived', 'living', 'believed', 'believing', 'held', 'holding', 'happened', 'happening', 'stood', 'standing', 'lost', 'losing', 'paid', 'paying', 'met', 'meeting', 'included', 'including', 'continued', 'continuing', 'learned', 'learnt', 'learning', 'changed', 'changing', 'led', 'leading', 'understood', 'understanding', 'watched', 'watching', 'followed', 'following', 'stopped', 'stopping', 'created', 'creating', 'spoke', 'spoken', 'speaking', 'read', 'reading', 'allowed', 'allowing', 'added', 'adding', 'spent', 'spending', 'grew', 'grown', 'growing', 'opened', 'opening', 'walked', 'walking', 'offered', 'offering', 'remembered', 'remembering', 'loved', 'loving', 'considered', 'considering', 'appeared', 'appearing', 'bought', 'buying', 'waited', 'waiting', 'served', 'serving', 'died', 'dying', 'sent', 'sending', 'expected', 'expecting', 'built', 'building', 'stayed', 'staying', 'fell', 'fallen', 'falling', 'cut', 'cutting', 'reached', 'reaching', 'killed', 'killing', 'remained', 'remaining', 'suggested', 'suggesting', 'raised', 'raising', 'passed', 'passing', 'sold', 'selling', 'required', 'requiring', 'reported', 'reporting', 'decided', 'deciding', 'pulled', 'pulling',
+    'the', 'be', 'to', 'of', 'and', 'a', 'in', 'that', 'have', 'i', 'it', 'for', 'not', 'on', 'with', 'he', 'as', 'you', 'do', 'at', 'this', 'but', 'his', 'by', 'from', 'they', 'we', 'say', 'her', 'she', 'or', 'an', 'will', 'my', 'one', 'all', 'would', 'there', 'their', 'what', 'so', 'up', 'out', 'if', 'about', 'who', 'get', 'which', 'go', 'me', 'when', 'make', 'can', 'like', 'time', 'no', 'just', 'him', 'know', 'take', 'people', 'into', 'year', 'your', 'good', 'some', 'could', 'them', 'see', 'other', 'than', 'then', 'now', 'look', 'only', 'come', 'its', 'over', 'think', 'also', 'back', 'after', 'use', 'two', 'how', 'our', 'work', 'first', 'well', 'way', 'even', 'new', 'want', 'because', 'any', 'these', 'give', 'day', 'most', 'us', 'is', 'was', 'are', 'were', 'been', 'has', 'had', 'did', 'does', 'doing', 'done',
 }
+
+# 【新增】财经术语模式（用于过滤破碎词组）
+FINANCIAL_PATTERNS = [
+    r'归母净利润',
+    r'同比增长',
+    r'环比下降',
+    r'营业收入',
+    r'净利润率',
+    r'毛利率',
+    r'资产负债',
+    r'现金流',
+    r'每股收益',
+    r'市盈率',
+    r'市净率',
+    r'收益率',
+    r'回报率',
+    r'百分点',
+    r'营收增长',
+    r'利润增长',
+    r'业绩增长',
+]
+
+# 【新增】无意义短词模式（需要过滤）
+MEANLESS_PATTERNS = [
+    r'^[母归归母母净净利利润润母净归母归母净归母利润母净利润]+$',  # 破碎的财务词
+    r'^[同比比增增长长同比增比增长]+$',  # 破碎的增长词
+    r'^..$',  # 只有2个字符
+    r'^第[一二三四五六七八九十]+$',  # "第一", "第二"等
+    r'^[上下左右前后内外]+$',  # 纯方位词
+]
+
+
+def is_meaningless_phrase(phrase):
+    """
+    判断一个词组是否无意义（破碎词组或常见术语）
+    """
+    # 检查是否是破碎的财务术语
+    fragmented_terms = ['归母净', '母净利', '归母利', '母净利润', '净利润', '同比增', '比增长', '环比增']
+    for term in fragmented_terms:
+        if phrase == term or phrase in term or term in phrase:
+            # 检查是否是完整术语
+            if phrase not in ['归母净利润', '同比增长', '环比下降', '营业收入']:
+                return True
+    
+    # 检查是否匹配无意义模式
+    for pattern in MEANLESS_PATTERNS:
+        if re.match(pattern, phrase):
+            return True
+    
+    return False
+
+
+def merge_overlapping_ngrams(ngrams_with_scores):
+    """
+    合并重叠的n-gram，保留最长的、得分最高的短语
+    例如：["归母净", "母净利", "归母净利润"] -> ["归母净利润"]
+    """
+    if not ngrams_with_scores:
+        return []
+    
+    # 按长度降序，然后按得分降序
+    sorted_ngrams = sorted(ngrams_with_scores, key=lambda x: (-len(x[0]), -x[1]))
+    
+    merged = []
+    used_chars = set()  # 记录已使用的字符位置
+    
+    for ngram, score in sorted_ngrams:
+        # 检查是否与已合并的词重叠
+        is_overlapping = False
+        for merged_ngram, _ in merged:
+            # 如果一个是另一个的子串，跳过短的
+            if ngram in merged_ngram or merged_ngram in ngram:
+                is_overlapping = True
+                break
+            # 检查是否有大量字符重叠（超过50%）
+            overlap_count = sum(1 for c in ngram if c in merged_ngram)
+            if len(ngram) > 0 and overlap_count / len(ngram) > 0.5:
+                is_overlapping = True
+                break
+        
+        if not is_overlapping and not is_meaningless_phrase(ngram):
+            merged.append((ngram, score))
+    
+    return merged
+
+
+def extract_meaningful_phrases(title, news_id, phrases_dict):
+    """
+    从标题中提取有意义的短语
+    使用更长的n-gram和更好的过滤策略
+    """
+    # 只保留中文字符
+    chars = [c for c in title if '\u4e00' <= c <= '\u9fff']
+    
+    if len(chars) < 4:
+        return
+    
+    # 提取 4-gram 到 6-gram（更长的短语更有可能是完整的概念）
+    for n in range(6, 3, -1):  # 从6-gram到4-gram
+        for i in range(len(chars) - n + 1):
+            phrase = ''.join(chars[i:i+n])
+            
+            # 过滤条件
+            # 1. 包含停用词
+            if any(c in ZH_STOPWORDS for c in phrase):
+                continue
+            
+            # 2. 是无意义短语
+            if is_meaningless_phrase(phrase):
+                continue
+            
+            # 3. 纯数字
+            if phrase.isdigit():
+                continue
+            
+            # 4. 日期格式
+            if re.match(r'^\d+年$|^\d+月$|^\d+日$', phrase):
+                continue
+            
+            # 添加到字典
+            if phrase not in phrases_dict:
+                phrases_dict[phrase] = {'count': 0, 'news_ids': set(), 'length': n}
+            phrases_dict[phrase]['news_ids'].add(news_id)
+            phrases_dict[phrase]['count'] = len(phrases_dict[phrase]['news_ids'])
 
 
 @app.route('/api/stats/topics', methods=['GET'])
 def get_hot_topics():
     """
     获取近48小时内的热门话题 TOP 10
+    【优化版】使用更长的n-gram和重叠合并策略，提取更有意义的热点话题
     返回格式: [{"name": "人工智能", "count": 156}, {"name": "气候变化", "count": 132}, ...]
     """
     try:
@@ -410,8 +544,8 @@ def get_hot_topics():
             
             rows = result.fetchall()
             
-            # 从标题中提取 n-gram
-            ngram_counts = {}
+            # 提取有意义的短语
+            phrases_dict = {}
             
             for row in rows:
                 news_id = row[0]
@@ -419,25 +553,7 @@ def get_hot_topics():
                 lang = row[2] or 'zh'
                 
                 if lang == 'zh':
-                    # 中文：提取 3-gram 和 4-gram
-                    chars = [c for c in title if '\u4e00' <= c <= '\u9fff']
-                    
-                    # 3-gram
-                    for i in range(len(chars) - 2):
-                        ngram = chars[i] + chars[i+1] + chars[i+2]
-                        # 过滤包含停用词的 n-gram
-                        if not any(c in ZH_STOPWORDS for c in ngram):
-                            if ngram not in ngram_counts:
-                                ngram_counts[ngram] = {'count': 0, 'news_ids': set()}
-                            ngram_counts[ngram]['news_ids'].add(news_id)
-                    
-                    # 4-gram
-                    for i in range(len(chars) - 3):
-                        ngram = chars[i] + chars[i+1] + chars[i+2] + chars[i+3]
-                        if not any(c in ZH_STOPWORDS for c in ngram):
-                            if ngram not in ngram_counts:
-                                ngram_counts[ngram] = {'count': 0, 'news_ids': set()}
-                            ngram_counts[ngram]['news_ids'].add(news_id)
+                    extract_meaningful_phrases(title, news_id, phrases_dict)
                 else:
                     # 英文：提取 2-gram 和 3-gram（词级别）
                     words = re.findall(r'\b[a-zA-Z]+\b', title.lower())
@@ -445,17 +561,19 @@ def get_hot_topics():
                     
                     # 2-gram
                     for i in range(len(words) - 1):
-                        ngram = words[i] + ' ' + words[i+1]
-                        if ngram not in ngram_counts:
-                            ngram_counts[ngram] = {'count': 0, 'news_ids': set()}
-                        ngram_counts[ngram]['news_ids'].add(news_id)
+                        phrase = words[i] + ' ' + words[i+1]
+                        if phrase not in phrases_dict:
+                            phrases_dict[phrase] = {'count': 0, 'news_ids': set(), 'length': 2}
+                        phrases_dict[phrase]['news_ids'].add(news_id)
+                        phrases_dict[phrase]['count'] = len(phrases_dict[phrase]['news_ids'])
                     
                     # 3-gram
                     for i in range(len(words) - 2):
-                        ngram = words[i] + ' ' + words[i+1] + ' ' + words[i+2]
-                        if ngram not in ngram_counts:
-                            ngram_counts[ngram] = {'count': 0, 'news_ids': set()}
-                        ngram_counts[ngram]['news_ids'].add(news_id)
+                        phrase = words[i] + ' ' + words[i+1] + ' ' + words[i+2]
+                        if phrase not in phrases_dict:
+                            phrases_dict[phrase] = {'count': 0, 'news_ids': set(), 'length': 3}
+                        phrases_dict[phrase]['news_ids'].add(news_id)
+                        phrases_dict[phrase]['count'] = len(phrases_dict[phrase]['news_ids'])
             
             # 获取国家名称列表用于过滤
             country_result = conn.execute(text("""
@@ -471,61 +589,42 @@ def get_hot_topics():
                 if row[2]:
                     country_names.add(row[2].lower())
             
-            # 过滤并计算 doc_freq
-            filtered_topics = []
-            for ngram, data in ngram_counts.items():
+            # 准备合并的数据
+            ngrams_with_scores = []
+            for phrase, data in phrases_dict.items():
+                doc_freq = data['count']
+                length = data['length']
+                
                 # 过滤条件
-                if len(ngram) < 3:  # 长度过滤
+                if len(phrase) < 4:  # 长度过滤
                     continue
-                if ngram.isdigit():  # 纯数字
+                if phrase.isdigit():  # 纯数字
                     continue
-                if re.match(r'^\d+年$|^\d+月$|^\d+日$', ngram):  # 日期格式
+                if re.match(r'^\d+年$|^\d+月$|^\d+日$', phrase):  # 日期格式
                     continue
-                if ngram.lower() in country_codes or ngram in country_names:  # 国家名
+                if phrase.lower() in country_codes or phrase in country_names:  # 国家名
+                    continue
+                if is_meaningless_phrase(phrase):  # 无意义短语
                     continue
                 
-                doc_freq = len(data['news_ids'])
+                # 调整得分：更长且出现频率高的短语得分更高
+                # 使用对数来平衡频率和长度的影响
+                score = doc_freq * (1 + 0.2 * length)
+                
                 if doc_freq >= 2:  # 至少出现在2条新闻中
-                    filtered_topics.append({
-                        'name': ngram,
-                        'count': doc_freq
-                    })
+                    ngrams_with_scores.append((phrase, score, doc_freq))
             
-            # 按出现频率排序，取前10
-            filtered_topics.sort(key=lambda x: x['count'], reverse=True)
-            top_topics = filtered_topics[:10]
+            # 合并重叠的n-gram
+            merged_topics = merge_overlapping_ngrams(ngrams_with_scores)
             
-            # 如果没有足够的中文话题，回退到英文
-            if len(top_topics) < 5:
-                # 补充英文话题
-                en_result = conn.execute(text("""
-                    SELECT 
-                        n.news_id,
-                        n.title
-                    FROM news n
-                    WHERE n.created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR)
-                      AND n.language = 'en'
-                    ORDER BY n.created_at DESC
-                    LIMIT 200
-                """))
-                
-                for row in en_result.fetchall():
-                    title = row[1] or ''
-                    words = re.findall(r'\b[a-zA-Z]+\b', title.lower())
-                    words = [w for w in words if len(w) >= 4 and w not in EN_STOPWORDS]
-                    
-                    for i in range(len(words) - 1):
-                        ngram = words[i] + ' ' + words[i+1]
-                        if ngram not in ngram_counts:
-                            # 检查是否已存在
-                            exists = False
-                            for topic in top_topics:
-                                if topic['name'].lower() == ngram.lower():
-                                    exists = True
-                                    break
-                            if not exists and len(ngram) >= 4:
-                                # 简单计数
-                                pass
+            # 按得分排序，取前10
+            merged_topics.sort(key=lambda x: x[1], reverse=True)
+            top_topics = []
+            for phrase, score, count in merged_topics[:10]:
+                top_topics.append({
+                    'name': phrase,
+                    'count': count
+                })
             
             return jsonify(top_topics)
     except Exception as e:
@@ -796,6 +895,39 @@ def get_news_detail(news_id):
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+
+
+# 前端路由 - 所有非 API 请求都返回 index.html（支持 React Router）
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def serve_frontend(path):
+    """服务前端静态文件"""
+    # API 请求直接返回 404，让 Flask 处理
+    if path.startswith('api/') or path.startswith('sru') or path == 'health':
+        return jsonify({"error": "Not found"}), 404
+    
+    # 检查静态文件是否存在
+    file_path = os.path.join(STATIC_DIR, path)
+    if path and os.path.exists(file_path) and os.path.isfile(file_path):
+        return send_from_directory(STATIC_DIR, path)
+    
+    # 否则返回 index.html（让 React Router 处理前端路由）
+    index_path = os.path.join(STATIC_DIR, 'index.html')
+    if os.path.exists(index_path):
+        return send_from_directory(STATIC_DIR, 'index.html')
+    
+    # 如果没有静态文件，返回简单的 API 说明
+    return jsonify({
+        "status": "QuickNews API is running",
+        "endpoints": {
+            "health": "/health",
+            "api": "/api/*",
+            "sru": "/sru",
+            "categories": "/api/categories",
+            "country_stats": "/api/stats/countries",
+            "hot_topics": "/api/stats/topics"
+        }
+    })
 
 
 def create_app():

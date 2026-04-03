@@ -6,10 +6,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
-import { ArrowRight, Search as SearchIcon, Clock, X } from 'lucide-react';
+import { ArrowRight, Search as SearchIcon, Clock, X, Tag } from 'lucide-react';
 import Earth3D from '../components/Earth3D';
 import NewsCard from '../components/NewsCard';
-import { searchNews, getLatestNews } from '../utils/api';
+import { searchNews, getLatestNews, getCategories, getNewsByCategory } from '../utils/api';
 
 export default function Search() {
   const navigate = useNavigate();
@@ -19,9 +19,15 @@ export default function Search() {
   const [searchHistory, setSearchHistory] = useState([]);
   const [showHistory, setShowHistory] = useState(false);
   
-  // 加载最新新闻
+  // 分类相关状态
+  const [categories, setCategories] = useState([]);
+  const [selectedCategory, setSelectedCategory] = useState(null);
+  const [categoriesLoading, setCategoriesLoading] = useState(false);
+  
+  // 加载最新新闻和分类
   useEffect(() => {
     loadLatestNews();
+    loadCategories();
     
     // 从本地存储加载搜索历史
     const saved = localStorage.getItem('searchHistory');
@@ -33,6 +39,19 @@ export default function Search() {
       }
     }
   }, []);
+  
+  // 加载分类数据
+  const loadCategories = async () => {
+    setCategoriesLoading(true);
+    try {
+      const cats = await getCategories();
+      setCategories(cats);
+    } catch (error) {
+      console.error('Load categories error:', error);
+    } finally {
+      setCategoriesLoading(false);
+    }
+  };
   
   // 加载最新新闻
   const loadLatestNews = async () => {
@@ -56,6 +75,7 @@ export default function Search() {
     
     setLoading(true);
     setShowHistory(false);
+    setSelectedCategory(null); // 清除分类选择
     
     try {
       const news = await searchNews(searchQuery, 20);
@@ -94,12 +114,14 @@ export default function Search() {
   // 清除搜索
   const handleClear = () => {
     setQuery('');
+    setSelectedCategory(null);
     loadLatestNews();
   };
   
   // 从历史记录搜索
   const handleHistoryClick = (term) => {
     setQuery(term);
+    setSelectedCategory(null);
     performSearch(term);
   };
   
@@ -113,20 +135,41 @@ export default function Search() {
   
   // 返回主页
   const handleBack = () => {
-    navigate('/');
+    navigate('/', { state: { fromInternal: true } });
   };
 
   // 点击新闻跳转到详情页
   const handleNewsClick = (newsId) => {
-    navigate(`/news/${newsId}`);
+    navigate(`/news/${newsId}`, { state: { fromInternal: true } });
   };
   
-  // 搜索提示
-  const searchTips = [
-    { label: 'title:中国', desc: '搜索标题含"中国"的新闻' },
-    { label: 'country:US', desc: '搜索美国相关新闻' },
-    { label: '人工智能', desc: '搜索相关话题' },
-  ];
+  // 处理分类按钮点击
+  const handleCategoryClick = async (category) => {
+    setLoading(true);
+    setSelectedCategory(category);
+    setQuery(''); // 清除搜索框内容
+    setShowHistory(false);
+    
+    try {
+      const news = await getNewsByCategory(category.category_code, 20);
+      setNewsList(news);
+    } catch (error) {
+      console.error('Load news by category error:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+  
+  // 获取页面标题
+  const getPageTitle = () => {
+    if (query) {
+      return `"${query}" 的搜索结果`;
+    }
+    if (selectedCategory) {
+      return `${selectedCategory.category_name} 相关新闻`;
+    }
+    return '最新新闻';
+  };
   
   return (
     <div className="relative w-full h-screen overflow-hidden bg-[#0a0a0f]">
@@ -219,7 +262,7 @@ export default function Search() {
             )}
           </motion.form>
           
-          {/* 搜索提示 */}
+          {/* 分类按钮区域 */}
           {!query && (
             <motion.div
               className="mb-6"
@@ -227,17 +270,45 @@ export default function Search() {
               animate={{ opacity: 1 }}
               transition={{ delay: 0.6, duration: 0.4 }}
             >
-              <div className="text-white/40 text-xs mb-2">搜索提示</div>
+              <div className="text-white/40 text-xs mb-2 flex items-center gap-1">
+                <Tag size={12} />
+                分类浏览
+              </div>
               <div className="flex flex-wrap gap-2">
-                {searchTips.map((tip, index) => (
-                  <button
-                    key={tip.label}
-                    onClick={() => handleHistoryClick(tip.label)}
-                    className="px-3 py-1.5 rounded-lg glass text-sm text-white/60 hover:text-white hover:border-[#00d4ff]/30 transition-all"
-                  >
-                    <span className="text-[#00d4ff]">{tip.label}</span>
-                  </button>
-                ))}
+                {categoriesLoading ? (
+                  <div className="flex items-center gap-2 text-white/40 text-sm">
+                    <div className="w-4 h-4 border-2 border-[#00d4ff] border-t-transparent rounded-full animate-spin" />
+                    加载分类...
+                  </div>
+                ) : (
+                  categories.map((category, index) => (
+                    <motion.button
+                      key={category.category_code}
+                      onClick={() => handleCategoryClick(category)}
+                      className={`px-3 py-1.5 rounded-lg glass text-sm transition-all ${
+                        selectedCategory?.category_code === category.category_code
+                          ? 'text-white border-[#00d4ff]/50 bg-[#00d4ff]/10'
+                          : 'text-white/60 hover:text-white hover:border-[#00d4ff]/30'
+                      }`}
+                      style={{
+                        borderColor: selectedCategory?.category_code === category.category_code 
+                          ? category.color_code 
+                          : undefined
+                      }}
+                      initial={{ opacity: 0, scale: 0.8 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      transition={{ delay: 0.6 + index * 0.05, duration: 0.3 }}
+                      whileHover={{ scale: 1.05 }}
+                      whileTap={{ scale: 0.95 }}
+                    >
+                      <span 
+                        className="inline-block w-2 h-2 rounded-full mr-1.5"
+                        style={{ backgroundColor: category.color_code }}
+                      />
+                      {category.category_name}
+                    </motion.button>
+                  ))
+                )}
               </div>
             </motion.div>
           )}
@@ -251,7 +322,7 @@ export default function Search() {
           >
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-white/80 font-medium">
-                {query ? `"${query}" 的搜索结果` : '最新新闻'}
+                {getPageTitle()}
               </h3>
               {newsList.length > 0 && (
                 <span className="text-white/40 text-sm">
@@ -283,7 +354,7 @@ export default function Search() {
                 <div className="text-center py-12 text-white/40">
                   <SearchIcon size={48} className="mx-auto mb-4 opacity-30" />
                   <p>未找到相关新闻</p>
-                  <p className="text-sm mt-1">尝试其他关键词</p>
+                  <p className="text-sm mt-1">尝试其他关键词或分类</p>
                 </div>
               )}
             </div>

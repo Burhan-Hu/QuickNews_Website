@@ -5,36 +5,59 @@
 
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import Earth3D from '../components/Earth3D';
 import Clock from '../components/Clock';
 import GlassButton from '../components/GlassButton';
 
 export default function Home() {
   const navigate = useNavigate();
-  const [showIntro, setShowIntro] = useState(true);
-  const [showUI, setShowUI] = useState(false);
+  const location = useLocation();
+  
+  // 判断是否从内部页面返回
+  const isFromInternal = location.state?.fromInternal === true;
+  // 检查是否已看过开场动画
+  const hasSeenIntro = sessionStorage.getItem('qk_has_seen_intro') === 'true';
+  
+  // 仅当不是从内部页面返回且未看过开场动画时，才显示开场动画
+  const [showIntro, setShowIntro] = useState(!isFromInternal && !hasSeenIntro);
+  const [showUI, setShowUI] = useState(isFromInternal || hasSeenIntro);
   
   // 开场动画序列
   useEffect(() => {
+    // 如果不需要显示开场动画，直接返回
+    if (!showIntro) {
+      return;
+    }
+    
     const timer = setTimeout(() => {
       setShowIntro(false);
       setShowUI(true);
+      // 动画播放结束后，标记已看过开场动画
+      sessionStorage.setItem('qk_has_seen_intro', 'true');
     }, 4000);
     
     return () => clearTimeout(timer);
-  }, []);
+  }, [showIntro]);
   
-  // 导航处理
+  // 导航处理 - 跳转到其他页面时标记为内部导航
   const handleNavigate = (path) => {
-    navigate(path);
+    navigate(path, { state: { fromInternal: true } });
   };
   
   return (
     <div className="relative w-full h-screen overflow-hidden bg-[#0a0a0f]">
       {/* 开场动画 */}
       <AnimatePresence>
-        {showIntro && <IntroAnimation onComplete={() => setShowIntro(false)} />}
+        {showIntro && (
+          <IntroAnimation 
+            onComplete={() => {
+              setShowIntro(false);
+              setShowUI(true);
+              sessionStorage.setItem('qk_has_seen_intro', 'true');
+            }} 
+          />
+        )}
       </AnimatePresence>
       
       {/* 3D 地球背景 */}
