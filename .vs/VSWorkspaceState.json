@@ -1,14 +1,11 @@
 {
   "ExpandedNodes": [
     "",
-    "\\app",
-    "\\app\\src",
     "\\news_dashboard",
     "\\news_dashboard\\config",
     "\\news_dashboard\\core",
     "\\news_dashboard\\ir",
     "\\news_dashboard\\scheduler"
   ],
-  "SelectedNode": "\\app\\src\\App.jsx",
   "PreviewInSolutionExplorer": false
 }

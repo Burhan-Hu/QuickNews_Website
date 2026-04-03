@@ -1,4 +1,4 @@
-from flask import Flask, request, Response, jsonify
+﻿from flask import Flask, request, Response, jsonify
 from flask_cors import CORS
 from sqlalchemy import text
 import sys,os
@@ -73,8 +73,46 @@ class XMLSearchEngine:
     
         return terms, lang, xpath_filter
     
+    def _get_latest_news(self, max_results=20, offset=0):
+        """获取最新新闻（内部方法，用于 * 查询）"""
+        sql = text("""
+            SELECT 
+                n.news_id,
+                n.xml_content,
+                n.title,
+                n.created_at,
+                1.0 as score,
+                1 as match_count
+            FROM news n
+            WHERE n.created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR)
+            ORDER BY n.created_at DESC
+            LIMIT :limit OFFSET :offset
+        """)
+        
+        with self.engine.connect() as conn:
+            rows = conn.execute(sql, {'limit': max_results, 'offset': offset}).fetchall()
+            results = []
+            for r in rows:
+                try:
+                    xml_root = ET.fromstring(r[1] if r[1] else f'<news id="{r[0]}"><title>{html.escape(r[2])}</title></news>')
+                    results.append({
+                        'id': r[0], 'xml': r[1], 'title': r[2], 
+                        'score': r[4], 'time': r[3]
+                    })
+                except:
+                    results.append({
+                        'id': r[0], 'xml': r[1], 'title': r[2], 
+                        'score': r[4], 'time': r[3]
+                    })
+            return results, len(results)
+
     def search(self, query_str, max_results=20, offset=0):
         """执行XML检索"""
+        
+        # 【新增】查询为 * 时，直接返回最新新闻（用于 getLatestNews）
+        if query_str.strip() == '*':
+            return self._get_latest_news(max_results, offset)
+        
         terms, lang, xpath = self.parse_query(query_str)
     
         # 【新增】国家查询特殊处理（强制大写 + 直接查 news_countries 表）
@@ -89,6 +127,7 @@ class XMLSearchEngine:
                 return [], 0
         
             # 直接查 news_countries 表（精确匹配，不依赖倒排索引的大小写）
+            # 【统一主要关联国逻辑】只查询 is_primary = TRUE 的记录，与热力图保持一致
             placeholders = ', '.join([f':c{i}' for i in range(len(country_codes))])
             sql = text(f"""
                 SELECT 
@@ -99,9 +138,8 @@ class XMLSearchEngine:
                     1.5 as score,
                     1 as match_count
                 FROM news n
-                JOIN news_countries nc ON n.news_id = nc.news_id
+                JOIN news_countries nc ON n.news_id = nc.news_id AND nc.is_primary = TRUE
                 WHERE nc.country_code IN ({placeholders})
-                  AND nc.is_primary = TRUE
                   AND n.created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR)
                 ORDER BY n.created_at DESC
                 LIMIT :limit OFFSET :offset
@@ -299,19 +337,20 @@ def health():
 @app.route('/api/stats/countries', methods=['GET'])
 def get_country_stats():
     """
-    获取近48小时内各国新闻数量统计
+    获取近48小时内各国新闻数量统计（包含所有关联国家）
     返回格式: {"CN": 45, "US": 38, "JP": 25, ...}
     """
     try:
         with engine.connect() as conn:
+            # 限制 is_primary = TRUE
             result = conn.execute(text("""
                 SELECT 
                     nc.country_code,
-                    COUNT(*) as news_count
+                    COUNT(DISTINCT nc.news_id) as news_count
                 FROM news_countries nc
                 JOIN news n ON nc.news_id = n.news_id
                 WHERE n.created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR)
-                  AND nc.is_primary = TRUE
+                  AND nc.is_primary = TRUE        -- ← 只统计主要关联国
                 GROUP BY nc.country_code
                 ORDER BY news_count DESC
             """))
@@ -329,6 +368,26 @@ def get_country_stats():
         return jsonify({"error": str(e)}), 500
 
 
+# ==================== 停用词表 ====================
+
+# 中文停用词表（扩展版）
+ZH_STOPWORDS = {
+    # 基础停用词
+    '的', '了', '和', '是', '在', '我', '有', '不', '人', '都', '一', '一个', '上', '也', '很', '到', '说', '要', '去', '你', '会', '着', '看', '好', '自己', '这', '那', '之', '与', '及', '或', '但', '而', '因为', '所以', '因此', '如果', '虽然', '由', '被', '把', '给', '让', '向', '从', '为', '对', '关于', '通过', '作为', '进行', '表示', '认为', '已经', '开始', '目前', '今年', '去年', '正在', '成为', '需要', '可以', '没有', '以及', '随着', '根据', '由于', '但是', '并且', '同时', '其中', '其他', '相关',
+    # 扩展停用词
+    '一些', '这些', '那些', '问题', '方面', '情况', '工作', '发展', '建设', '政府', '国家', '地区', '国际', '世界', '报道', '记者', '消息', '来源', '图片', '视频', '时间', '日期', '时候', '今天', '明天', '昨天', '此时', '此前', '之后', '后来', '近日', '日前', '目前', '现在', '当时', '当场', '即将', '将要', '曾经', '一度', '一直', '不断', '逐渐', '进一步', '继续', '持续', '保持', '加强', '推进', '推动', '促进', '提高', '提升', '增强', '扩大', '深化', '完善', '落实', '实现', '确保', '坚持', '维护', '保障', '服务', '管理', '监督', '检查', '调查', '研究', '分析', '总结', '介绍', '说明', '指出', '强调', '提出', '呼吁', '宣布', '发布', '签署', '达成', '举行', '召开', '访问', '会见', '会谈', '协商', '合作', '交流', '互动', '联系', '沟通', '协调', '配合', '支持', '帮助', '协助', '参与', '参加', '加入', '入选', '荣获', '获得', '取得', '完成', '结束', '启动', '开幕', '闭幕', '举办', '开展', '组织', '策划', '实施', '执行', '制定', '修订', '修改', '调整', '改革', '创新', '探索', '尝试', '努力', '奋斗', '争取', '期待', '希望', '愿望', '目标', '目的', '意义', '价值', '作用', '影响', '效果', '成果', '成绩', '业绩', '表现', '状态', '形势', '趋势', '走向', '格局', '环境', '条件', '基础', '平台', '机制', '体系', '结构', '模式', '方式', '方法', '途径', '渠道', '手段', '措施', '办法', '策略', '战略', '规划', '计划', '方案', '议程', '日程', '安排', '部署', '配置', '设置', '规定', '规则', '制度', '政策', '法律', '法规', '条例', '标准', '规范', '准则', '原则', '要求', '条件', '资格', '能力', '水平', '质量', '品质', '效率', '速度', '进度', '节奏', '规模', '范围', '领域', '行业', '产业', '市场', '企业', '公司', '机构', '单位', '部门', '团队', '组织', '群体', '个人', '人士', '专家', '学者', '官员', '领导', '代表', '成员', '群众', '公众', '市民', '居民', '游客', '观众', '读者', '用户', '客户', '消费者', '投资者', '创业者', '从业者', '劳动者', '员工', '职员', '干部', '党员', '团员', '队员', '选手', '运动员', '演员', '歌手', '作家', '艺术家', '科学家', '工程师', '医生', '护士', '教师', '学生', '儿童', '青年', '少年', '老年', '妇女', '男性', '女性', '朋友', '家人', '亲属', '同事', '同学', '同胞', '同志', '伙伴', '盟友', '对手', '敌人', '竞争者', '邻居', '市民', '国民', '公民', '人类', '人口', '人们', '人才', '人物', '人员', '人力', '人手', '人头', '人群', '人体', '人心', '人性', '人生', '人士', '人间', '人世', '人事', '人工', '人才', '人口',
+    # 数字相关
+    '一', '二', '三', '四', '五', '六', '七', '八', '九', '十', '百', '千', '万', '亿',
+    # 时间相关
+    '年', '月', '日', '时', '分', '秒', '周', '星期', '季度',
+}
+
+# 英文停用词表（扩展版）
+EN_STOPWORDS = {
+    'the', 'be', 'to', 'of', 'and', 'a', 'in', 'that', 'have', 'i', 'it', 'for', 'not', 'on', 'with', 'he', 'as', 'you', 'do', 'at', 'this', 'but', 'his', 'by', 'from', 'they', 'we', 'say', 'her', 'she', 'or', 'an', 'will', 'my', 'one', 'all', 'would', 'there', 'their', 'what', 'so', 'up', 'out', 'if', 'about', 'who', 'get', 'which', 'go', 'me', 'when', 'make', 'can', 'like', 'time', 'no', 'just', 'him', 'know', 'take', 'people', 'into', 'year', 'your', 'good', 'some', 'could', 'them', 'see', 'other', 'than', 'then', 'now', 'look', 'only', 'come', 'its', 'over', 'think', 'also', 'back', 'after', 'use', 'two', 'how', 'our', 'work', 'first', 'well', 'way', 'even', 'new', 'want', 'because', 'any', 'these', 'give', 'day', 'most', 'us', 'is', 'was', 'are', 'were', 'been', 'has', 'had', 'did', 'does', 'doing', 'done', 'said', 'says', 'saying', 'made', 'making', 'came', 'coming', 'went', 'gone', 'got', 'getting', 'saw', 'seen', 'knew', 'known', 'thinking', 'thought', 'took', 'taken', 'told', 'asking', 'asked', 'working', 'worked', 'felt', 'trying', 'tried', 'left', 'leaving', 'called', 'calling', 'needed', 'needing', 'became', 'become', 'meaning', 'meant', 'kept', 'keeping', 'letting', 'putting', 'bringing', 'brought', 'began', 'begun', 'helped', 'helping', 'showed', 'shown', 'heard', 'hearing', 'played', 'playing', 'ran', 'run', 'running', 'moved', 'moving', 'lived', 'living', 'believed', 'believing', 'held', 'holding', 'happened', 'happening', 'stood', 'standing', 'lost', 'losing', 'paid', 'paying', 'met', 'meeting', 'included', 'including', 'continued', 'continuing', 'learned', 'learnt', 'learning', 'changed', 'changing', 'led', 'leading', 'understood', 'understanding', 'watched', 'watching', 'followed', 'following', 'stopped', 'stopping', 'created', 'creating', 'spoke', 'spoken', 'speaking', 'read', 'reading', 'allowed', 'allowing', 'added', 'adding', 'spent', 'spending', 'grew', 'grown', 'growing', 'opened', 'opening', 'walked', 'walking', 'offered', 'offering', 'remembered', 'remembering', 'loved', 'loving', 'considered', 'considering', 'appeared', 'appearing', 'bought', 'buying', 'waited', 'waiting', 'served', 'serving', 'died', 'dying', 'sent', 'sending', 'expected', 'expecting', 'built', 'building', 'stayed', 'staying', 'fell', 'fallen', 'falling', 'cut', 'cutting', 'reached', 'reaching', 'killed', 'killing', 'remained', 'remaining', 'suggested', 'suggesting', 'raised', 'raising', 'passed', 'passing', 'sold', 'selling', 'required', 'requiring', 'reported', 'reporting', 'decided', 'deciding', 'pulled', 'pulling',
+}
+
+
 @app.route('/api/stats/topics', methods=['GET'])
 def get_hot_topics():
     """
@@ -337,65 +396,142 @@ def get_hot_topics():
     """
     try:
         with engine.connect() as conn:
-            # 方案1: 从 inverted_index 表查询高频词项（标题权重更高）
+            # 获取近48小时的新闻标题
             result = conn.execute(text("""
                 SELECT 
-                    ii.term,
-                    COUNT(DISTINCT ii.news_id) as doc_count,
-                    SUM(ii.tf_weight) as total_weight
-                FROM inverted_index ii
-                JOIN news n ON ii.news_id = n.news_id
+                    n.news_id,
+                    n.title,
+                    n.language
+                FROM news n
                 WHERE n.created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR)
-                  AND ii.language = 'zh'
-                  AND LENGTH(ii.term) >= 2
-                  AND ii.term NOT IN ('中国', '美国', '日本', '今天', '我们', '他们', '可以', '进行', '表示', '认为', '已经', '开始', '目前', '今年', '去年')
-                GROUP BY ii.term
-                HAVING doc_count >= 2
-                ORDER BY total_weight DESC, doc_count DESC
-                LIMIT 10
+                ORDER BY n.created_at DESC
+                LIMIT 500
             """))
             
-            topics = []
-            for row in result.fetchall():
-                term = row[0]
-                count = int(row[1])
-                # 过滤单字和纯数字
-                if len(term) >= 2 and not term.isdigit():
-                    topics.append({
-                        "name": term,
-                        "count": count
+            rows = result.fetchall()
+            
+            # 从标题中提取 n-gram
+            ngram_counts = {}
+            
+            for row in rows:
+                news_id = row[0]
+                title = row[1] or ''
+                lang = row[2] or 'zh'
+                
+                if lang == 'zh':
+                    # 中文：提取 3-gram 和 4-gram
+                    chars = [c for c in title if '\u4e00' <= c <= '\u9fff']
+                    
+                    # 3-gram
+                    for i in range(len(chars) - 2):
+                        ngram = chars[i] + chars[i+1] + chars[i+2]
+                        # 过滤包含停用词的 n-gram
+                        if not any(c in ZH_STOPWORDS for c in ngram):
+                            if ngram not in ngram_counts:
+                                ngram_counts[ngram] = {'count': 0, 'news_ids': set()}
+                            ngram_counts[ngram]['news_ids'].add(news_id)
+                    
+                    # 4-gram
+                    for i in range(len(chars) - 3):
+                        ngram = chars[i] + chars[i+1] + chars[i+2] + chars[i+3]
+                        if not any(c in ZH_STOPWORDS for c in ngram):
+                            if ngram not in ngram_counts:
+                                ngram_counts[ngram] = {'count': 0, 'news_ids': set()}
+                            ngram_counts[ngram]['news_ids'].add(news_id)
+                else:
+                    # 英文：提取 2-gram 和 3-gram（词级别）
+                    words = re.findall(r'\b[a-zA-Z]+\b', title.lower())
+                    words = [w for w in words if len(w) >= 3 and w not in EN_STOPWORDS]
+                    
+                    # 2-gram
+                    for i in range(len(words) - 1):
+                        ngram = words[i] + ' ' + words[i+1]
+                        if ngram not in ngram_counts:
+                            ngram_counts[ngram] = {'count': 0, 'news_ids': set()}
+                        ngram_counts[ngram]['news_ids'].add(news_id)
+                    
+                    # 3-gram
+                    for i in range(len(words) - 2):
+                        ngram = words[i] + ' ' + words[i+1] + ' ' + words[i+2]
+                        if ngram not in ngram_counts:
+                            ngram_counts[ngram] = {'count': 0, 'news_ids': set()}
+                        ngram_counts[ngram]['news_ids'].add(news_id)
+            
+            # 获取国家名称列表用于过滤
+            country_result = conn.execute(text("""
+                SELECT country_code, country_name, country_name_en 
+                FROM countries
+            """))
+            country_names = set()
+            country_codes = set()
+            for row in country_result.fetchall():
+                country_codes.add(row[0].lower())
+                if row[1]:
+                    country_names.add(row[1])
+                if row[2]:
+                    country_names.add(row[2].lower())
+            
+            # 过滤并计算 doc_freq
+            filtered_topics = []
+            for ngram, data in ngram_counts.items():
+                # 过滤条件
+                if len(ngram) < 3:  # 长度过滤
+                    continue
+                if ngram.isdigit():  # 纯数字
+                    continue
+                if re.match(r'^\d+年$|^\d+月$|^\d+日$', ngram):  # 日期格式
+                    continue
+                if ngram.lower() in country_codes or ngram in country_names:  # 国家名
+                    continue
+                
+                doc_freq = len(data['news_ids'])
+                if doc_freq >= 2:  # 至少出现在2条新闻中
+                    filtered_topics.append({
+                        'name': ngram,
+                        'count': doc_freq
                     })
             
-            # 如果没有中文话题，尝试查询英文
-            if not topics:
-                result = conn.execute(text("""
+            # 按出现频率排序，取前10
+            filtered_topics.sort(key=lambda x: x['count'], reverse=True)
+            top_topics = filtered_topics[:10]
+            
+            # 如果没有足够的中文话题，回退到英文
+            if len(top_topics) < 5:
+                # 补充英文话题
+                en_result = conn.execute(text("""
                     SELECT 
-                        ii.term,
-                        COUNT(DISTINCT ii.news_id) as doc_count,
-                        SUM(ii.tf_weight) as total_weight
-                    FROM inverted_index ii
-                    JOIN news n ON ii.news_id = n.news_id
+                        n.news_id,
+                        n.title
+                    FROM news n
                     WHERE n.created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR)
-                      AND ii.language = 'en'
-                      AND LENGTH(ii.term) >= 3
-                    GROUP BY ii.term
-                    HAVING doc_count >= 2
-                    ORDER BY total_weight DESC, doc_count DESC
-                    LIMIT 10
+                      AND n.language = 'en'
+                    ORDER BY n.created_at DESC
+                    LIMIT 200
                 """))
                 
-                for row in result.fetchall():
-                    term = row[0]
-                    count = int(row[1])
-                    if len(term) >= 3:
-                        topics.append({
-                            "name": term,
-                            "count": count
-                        })
+                for row in en_result.fetchall():
+                    title = row[1] or ''
+                    words = re.findall(r'\b[a-zA-Z]+\b', title.lower())
+                    words = [w for w in words if len(w) >= 4 and w not in EN_STOPWORDS]
+                    
+                    for i in range(len(words) - 1):
+                        ngram = words[i] + ' ' + words[i+1]
+                        if ngram not in ngram_counts:
+                            # 检查是否已存在
+                            exists = False
+                            for topic in top_topics:
+                                if topic['name'].lower() == ngram.lower():
+                                    exists = True
+                                    break
+                            if not exists and len(ngram) >= 4:
+                                # 简单计数
+                                pass
             
-            return jsonify(topics)
+            return jsonify(top_topics)
     except Exception as e:
         print(f"[API Error] get_hot_topics: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 
@@ -461,6 +597,93 @@ def get_sources():
             return jsonify(sources)
     except Exception as e:
         print(f"[API Error] get_sources: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/categories', methods=['GET'])
+def get_categories():
+    """
+    获取所有新闻分类
+    返回格式: [{"category_id": 1, "category_name": "科技", "category_code": "tech", "color_code": "#3498db"}, ...]
+    """
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT 
+                    category_id,
+                    category_name,
+                    category_code,
+                    color_code
+                FROM categories
+                ORDER BY sort_order ASC
+            """))
+            
+            categories = []
+            for row in result.fetchall():
+                categories.append({
+                    "category_id": row[0],
+                    "category_name": row[1],
+                    "category_code": row[2],
+                    "color_code": row[3]
+                })
+            
+            return jsonify(categories)
+    except Exception as e:
+        print(f"[API Error] get_categories: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/news/category/<category_code>', methods=['GET'])
+def get_news_by_category(category_code):
+    """
+    获取指定分类下的最新新闻
+    返回格式: [{"id": 123, "title": "...", "summary": "...", "time": "...", "country": "CN"}, ...]
+    """
+    try:
+        with engine.connect() as conn:
+            # 获取分类ID
+            cat_result = conn.execute(
+                text("SELECT category_id FROM categories WHERE category_code = :code"),
+                {'code': category_code}
+            ).fetchone()
+            
+            if not cat_result:
+                return jsonify({"error": "Category not found"}), 404
+            
+            category_id = cat_result[0]
+            
+            # 获取该分类下的新闻
+            result = conn.execute(text("""
+                SELECT 
+                    n.news_id,
+                    n.title,
+                    n.summary,
+                    n.created_at,
+                    nc.country_code
+                FROM news n
+                JOIN news_categories ncat ON n.news_id = ncat.news_id
+                LEFT JOIN news_countries nc ON n.news_id = nc.news_id AND nc.is_primary = TRUE
+                WHERE ncat.category_id = :category_id
+                  AND n.created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR)
+                ORDER BY n.created_at DESC
+                LIMIT 20
+            """), {'category_id': category_id})
+            
+            news_list = []
+            for row in result.fetchall():
+                news_list.append({
+                    "id": row[0],
+                    "title": row[1],
+                    "summary": (row[2][:200] + '...') if row[2] and len(row[2]) > 200 else (row[2] or ''),
+                    "time": row[3].strftime('%Y-%m-%d %H:%M:%S') if row[3] else None,
+                    "country": row[4] or ''
+                })
+            
+            return jsonify(news_list)
+    except Exception as e:
+        print(f"[API Error] get_news_by_category: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 

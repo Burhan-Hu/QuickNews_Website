@@ -77,9 +77,15 @@ class NewsFetcher:
         texts = [p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True)]
         return '\n\n'.join(texts)
 
-    def fetch_newsapi(self):
-        """获取NewsAPI数据（移除长度检查，仅做数据抓取和格式清洗）"""
-        params_data = rotator.get_next_params()
+    def fetch_newsapi(self, mode='category'):
+        """获取NewsAPI数据（移除长度检查，仅做数据抓取和格式清洗）
+        mode: 'category' 按类别轮询, 'country' 按国家轮询
+        """
+        if mode == 'category':
+            params_data = rotator.get_category_params()
+        else:
+            params_data = rotator.get_country_params()
+            
         if not params_data:
             print("[NewsAPI] 已达到每日请求上限(100次)")
             return [], None
@@ -88,7 +94,8 @@ class NewsFetcher:
 
         try:
             url = f"{NEWSAPI_CONFIG['base_url']}/top-headlines"
-            print(f"[NewsAPI] 请求: {category}/{country}")
+            label = f"{category}" if mode == 'category' else f"country:{country}"
+            print(f"[NewsAPI] 请求 [{mode}]: {label}")
 
             response = self.session.get(url, params=params, timeout=10)
             response.raise_for_status()
@@ -162,7 +169,7 @@ class NewsFetcher:
                     print(f"  [NewsAPI] 单条处理失败，跳过: {str(e)[:50]}")
                     continue
 
-            print(f"[NewsAPI] ✓ 成功获取 {len(articles)} 条 [{category}/{country}]")
+            print(f"[NewsAPI] ✓ 成功获取 {len(articles)} 条 [{label}]")
             status = rotator.get_status()
             if status and isinstance(status, dict):
                 if 'next_country' not in status:

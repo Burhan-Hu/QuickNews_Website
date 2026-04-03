@@ -10,7 +10,7 @@ class NewsStorage:
     def save_article_with_xml_index(self, article):
         """
         保存文章并构建XML索引（适配新schema）
-        流程：1.调用sp_save_news_complete -> 2.调用sp_build_xml_index
+        流程：1.调用sp_save_news_complete -> 2.调用sp_build_xml_index -> 3.插入多国家关联
         """
         conn = self.engine.connect()
         trans = conn.begin()
@@ -60,7 +60,32 @@ class NewsStorage:
                 }
             )
             
-            # 步骤3：保存媒体文件
+            # 步骤3：只保存一个主要关联国（取消多关联国逻辑）
+            related_countries = article.get('related_countries', [])
+            if related_countries:
+                country_code, _ = related_countries[0]  # 只取第一个（主要关联国）
+                
+                # 删除旧记录，重新插入一条主要关联国
+                conn.execute(
+                    text("DELETE FROM news_countries WHERE news_id = :news_id"),
+                    {'news_id': news_id}
+                )
+                
+                conn.execute(
+                    text("""
+                        INSERT INTO news_countries (news_id, country_code, is_primary, mention_count)
+                        VALUES (:news_id, :country_code, TRUE, 1)
+                    """),
+                    {'news_id': news_id, 'country_code': country_code}
+                )
+            else:
+                # 无关联国的情况也删除旧记录（防止残留）
+                conn.execute(
+                    text("DELETE FROM news_countries WHERE news_id = :news_id"),
+                    {'news_id': news_id}
+                )
+            
+            # 步骤4：保存媒体文件
             self._save_media(conn, news_id, article)
             
             trans.commit()

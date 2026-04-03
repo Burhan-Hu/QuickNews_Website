@@ -1,6 +1,7 @@
 from html.parser import HTMLParser
 import re
 import json
+import os
 
 class MLStripper(HTMLParser):
     """HTML标签清洗器"""
@@ -16,6 +17,7 @@ class MLStripper(HTMLParser):
 class ContentProcessor:
     """
     XML检索增强版：支持中英文分词，输出JSON格式供数据库存储过程使用
+    国家关键词支持从数据库 country_keywords 表加载，失败时使用内置默认值
     """
     
     # source_name 到 source_id 的映射（与 schema2.sql 中的来源顺序一致）
@@ -45,14 +47,14 @@ class ContentProcessor:
         '纽约时报-中文': 20,
         '纽约时报中文版': 20,
         'BBC': 21,
-        '华尔街日报-中文': 22,
-        '华尔街日报-视频': 23,
-        '路透社-视频': 24,
         # 兼容 fetcher.py 中 NewsAPI 返回的名称
         'newsapi': 1,
     }
     
     def __init__(self):
+        # 从数据库加载国家关键词（如果失败则使用内置默认值）
+        self.country_keywords = self._load_country_keywords()
+        
         # 中文停用词（简化版）
         self.zh_stopwords = {'的', '了', '在', '是', '我', '有', '和', '就', '不', '人', '都', 
                              '一', '一个', '上', '也', '很', '到', '说', '要', '去', '你', '会', 
@@ -62,7 +64,7 @@ class ContentProcessor:
                              '由', '被', '把', '给', '让', '向', '往', '自', '从', '到', '关于', 
                              '对于', '为了', '为着', '除', '除了', '除去', '凭着', '根据', '按照', 
                              '通过', '经过', '随着', '作为', '如同', '好像', '一样', '似的', '似乎', 
-                             '一样', '一般', '似的', '一样地', '般地'}
+                             '一样', '一般', '似的', '一样地', '般地',}
         # 英文停用词
         self.en_stopwords = {'the', 'be', 'to', 'of', 'and', 'a', 'in', 'that', 'have', 'i', 
                              'it', 'for', 'not', 'on', 'with', 'he', 'as', 'you', 'do', 'at', 
@@ -76,6 +78,40 @@ class ContentProcessor:
                                'our', 'work', 'first', 'well', 'way', 'even', 'new', 'want', 'because',
                                  'any', 'these', 'give', 'day', 'most', 'us', 'is', 'was', 'are', 'were', 
                                  'been', 'has', 'had', 'did', 'does', 'doing', 'done'}
+
+    def _load_country_keywords(self):
+        """
+        从数据库 country_keywords 表加载国家关键词
+        如果失败或表为空，使用内置默认值
+        """
+        try:
+            from config.db_config import engine
+            from sqlalchemy import text
+            
+            with engine.connect() as conn:
+                result = conn.execute(text(
+                    "SELECT country_code, keyword FROM country_keywords ORDER BY country_code"
+                ))
+                rows = result.fetchall()
+                
+                if not rows:
+                    print("[Processor] country_keywords 表为空，使用内置默认关键词")
+                    return self.COUNTRY_KEYWORDS
+                
+                # 转换为字典格式
+                keywords_dict = {}
+                for row in rows:
+                    code, keyword = row[0], row[1]
+                    if code not in keywords_dict:
+                        keywords_dict[code] = {'keywords': [], 'weight': 1.0}
+                    keywords_dict[code]['keywords'].append(keyword)
+                
+                print(f"[Processor] 从数据库加载了 {len(keywords_dict)} 个国家的关键词")
+                return keywords_dict
+                
+        except Exception as e:
+            print(f"[Processor] 加载数据库关键词失败: {e}, 使用内置默认关键词")
+            return self.COUNTRY_KEYWORDS
 
     @staticmethod
     def clean_html(raw_html):
@@ -98,7 +134,7 @@ class ContentProcessor:
             return []
         
         # 清洗文本
-        text = re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9]', ' ', text)
+        text = re.sub(r'[^\u4e00-\u9fffa-zA-Z0-9]', ' ', text)
         
         terms = []
         chars = [c for c in text if '\u4e00' <= c <= '\u9fff' or c.isalnum()]
@@ -149,6 +185,46 @@ class ContentProcessor:
             return 'zh'
         return 'en'
 
+    def identify_countries(self, title, content):
+        """
+        【新逻辑】只返回一个主要关联国
+        1. 标题优先：标题中出现的国家按出现次数统计
+        2. 标题无匹配 → 正文统计出现次数最多的国家
+        3. 都没有匹配 → 返回空（无关联国）
+        """
+        if not title and not content:
+            return []
+
+        title = title or ''
+        content = content or ''
+
+        # 标题优先统计
+        title_counts = {}
+        for country_code, data in self.country_keywords.items():
+            count = sum(title.count(kw) for kw in data['keywords'])
+            if count > 0:
+                title_counts[country_code] = count
+
+        if title_counts:
+            # 取出现次数最多的国家作为主要关联国
+            max_country = max(title_counts.items(), key=lambda x: x[1])[0]
+            return [(max_country, True)]
+
+        # 标题无匹配 → 正文统计
+        content_counts = {}
+        for country_code, data in self.country_keywords.items():
+            count = sum(content.count(kw) for kw in data['keywords'])
+            if count > 0:
+                content_counts[country_code] = count
+
+        if content_counts:
+            # 取出现次数最多的国家作为主要关联国
+            max_country = max(content_counts.items(), key=lambda x: x[1])[0]
+            return [(max_country, True)]
+
+        # 都没有匹配到任何国家
+        return []
+
     def process_article(self, article):
         """
         处理文章：清洗HTML、分词、生成JSON格式分词结果
@@ -175,6 +251,9 @@ class ContentProcessor:
         source_name = article.get('source_name', '')
         source_id = self.SOURCE_NAME_TO_ID.get(source_name, 1)
         
+        # 【新增】识别相关国家
+        related_countries = self.identify_countries(title, content)
+        
         return {
             'title': title[:300],
             'content': content[:20000],
@@ -190,5 +269,7 @@ class ContentProcessor:
             # 【新增】分词结果JSON，供数据库存储过程使用
             'title_terms_json': json.dumps(title_terms, ensure_ascii=False),
             'content_terms_json': json.dumps(content_terms, ensure_ascii=False),
-            'term_count': len(title_terms) + len(content_terms)
+            'term_count': len(title_terms) + len(content_terms),
+            # 【新增】相关国家列表
+            'related_countries': related_countries,
         }

@@ -60,15 +60,25 @@ class NewsScheduler:
         total_saved = 0
         total_failed = 0
         
-        # 1. NewsAPI
-        api_articles, status = self.fetcher.fetch_newsapi()
+        # 1. NewsAPI - 类别轮询
+        api_articles, status = self.fetcher.fetch_newsapi(mode='category')
         if api_articles:
             self.stats['api_requests_today'] += 1
             total_fetched += len(api_articles)
-            s, f = self._process_and_save(api_articles, "NewsAPI")
+            s, f = self._process_and_save(api_articles, "NewsAPI-Category")
             total_saved += s
             total_failed += f
             del api_articles  # 释放内存
+        
+        # 1b. NewsAPI - 国家轮询
+        api_articles_country, status2 = self.fetcher.fetch_newsapi(mode='country')
+        if api_articles_country:
+            self.stats['api_requests_today'] += 1
+            total_fetched += len(api_articles_country)
+            s, f = self._process_and_save(api_articles_country, "NewsAPI-Country")
+            total_saved += s
+            total_failed += f
+            del api_articles_country  # 释放内存
         
         # 2. RSS源
         rss_articles = self.fetcher.fetch_all_rss()
@@ -153,10 +163,10 @@ class NewsScheduler:
             print(f"[IndexBuilder] 检查失败: {e}")
     
     def start(self):
-        # 主任务：每20分钟抓取并索引
+        # 主任务：每30分钟抓取并索引
         self.scheduler.add_job(
             self.job_fetch_and_save,
-            IntervalTrigger(minutes=20),
+            IntervalTrigger(minutes=30),
             id='fetch_job',
             replace_existing=True
         )

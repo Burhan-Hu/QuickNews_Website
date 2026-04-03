@@ -261,7 +261,7 @@ export default function About() {
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-white/60">更新频率</span>
-                <span className="text-[#00d4ff]">实时</span>
+                <span className="text-[#00d4ff]">30min/次</span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-white/60">索引类型</span>
@@ -285,7 +285,7 @@ export default function About() {
             animate={{ opacity: 1 }}
             transition={{ delay: 1, duration: 0.4 }}
           >
-            <p>© 2024 QuickNews. All rights reserved.</p>
+            <p>© 2024 QuickNews. All rights reserved. Author: Hu Bohan, Nankai University</p>
             <p className="mt-1">Powered by Flask + MySQL + React + Three.js</p>
           </motion.div>
         </div>
