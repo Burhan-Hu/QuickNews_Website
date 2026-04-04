@@ -44,7 +44,7 @@ export const countryCoords = {
   'SG': { lat: 1.3521, lon: 103.8198, name: '新加坡', emoji: '🇸🇬' },
   'OM': { lat: 21.4735, lon: 55.9754, name: '阿曼', emoji: '🇴🇲' },
   'KW': { lat: 29.3117, lon: 47.4818, name: '科威特', emoji: '🇰🇼' },
-  'GE': { lat: 32.1656, lon: -82.9001, name: '格鲁吉亚', emoji: '🇬🇪' },
+  'GE': { lat: 42.3154, lon: 43.3569, name: '格鲁吉亚', emoji: '🇬🇪' },
   'MN': { lat: 46.8625, lon: 103.8467, name: '蒙古', emoji: '🇲🇳' },
   'AM': { lat: 40.0691, lon: 45.0382, name: '亚美尼亚', emoji: '🇦🇲' },
   'QA': { lat: 25.3548, lon: 51.1839, name: '卡塔尔', emoji: '🇶🇦' },

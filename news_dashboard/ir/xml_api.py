@@ -9,6 +9,13 @@ import re
 import html
 import json
 
+try:
+    import jieba
+    _JIEBA_AVAILABLE = True
+except ImportError:
+    jieba = None
+    _JIEBA_AVAILABLE = False
+
 # 静态文件目录（生产环境）
 STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'static')
 
@@ -74,7 +81,7 @@ class XMLSearchEngine:
                 # 普通英文查询：保留>2字符的词
                 terms = [t.lower() for t in re.findall(r'\b\w+\b', clean_query) if len(t) > 2]
     
-        return terms, lang, xpath_filter
+        return terms, lang, xpath_filter, clean_query
     
     def _get_latest_news(self, max_results=20, offset=0):
         """获取最新新闻（内部方法，用于 * 查询）"""
@@ -116,7 +123,7 @@ class XMLSearchEngine:
         if query_str.strip() == '*':
             return self._get_latest_news(max_results, offset)
         
-        terms, lang, xpath = self.parse_query(query_str)
+        terms, lang, xpath, clean_query = self.parse_query(query_str)
     
         # 【新增】国家查询特殊处理（强制大写 + 直接查 news_countries 表）
         if xpath == '/news/metadata/country':
@@ -167,6 +174,57 @@ class XMLSearchEngine:
                             'score': r[4], 'time': r[3]
                         })
                 return results, len(results)
+    
+        # title查询回退到LIKE匹配，避免bigram索引无法命中jieba热点短语
+        if xpath == '/news/title':
+            if not clean_query:
+                return [], 0
+            
+            def _build_results(rows):
+                results = []
+                for r in rows:
+                    try:
+                        xml_root = ET.fromstring(r[1] if r[1] else f'<news id="{r[0]}"><title>{html.escape(r[2])}</title></news>')
+                        results.append({'id': r[0], 'xml': r[1], 'title': r[2], 'score': r[4], 'time': r[3]})
+                    except:
+                        results.append({'id': r[0], 'xml': r[1], 'title': r[2], 'score': r[4], 'time': r[3]})
+                return results
+            
+            safe_pattern = clean_query.replace('%', '\\%').replace('_', '\\_')
+            sql = text("""
+                SELECT n.news_id, n.xml_content, n.title, n.created_at, 2.0 as score, 1 as match_count
+                FROM news n
+                WHERE n.title LIKE :pattern
+                  AND n.created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR)
+                ORDER BY n.created_at DESC
+                LIMIT :limit OFFSET :offset
+            """)
+            with self.engine.connect() as conn:
+                rows = conn.execute(sql, {'pattern': f'%{safe_pattern}%', 'limit': max_results, 'offset': offset}).fetchall()
+                results = _build_results(rows)
+                if results:
+                    return results, len(results)
+            
+            # 兜底：拆成关键词用 AND LIKE 搜索（兼容jieba空格丢失、merge超长词等情况）
+            keywords = [k for k in re.split(r'[^a-zA-Z0-9\u4e00-\u9fff]+', clean_query) if len(k) >= 2]
+            if keywords:
+                like_clauses = ' AND '.join([f"n.title LIKE :p{i}" for i in range(len(keywords))])
+                sql_fallback = text(f"""
+                    SELECT n.news_id, n.xml_content, n.title, n.created_at, 1.5 as score, 1 as match_count
+                    FROM news n
+                    WHERE {like_clauses}
+                      AND n.created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR)
+                    ORDER BY n.created_at DESC
+                    LIMIT :limit OFFSET :offset
+                """)
+                params = {f'p{i}': f'%{kw.replace("%", "\\%").replace("_", "\\_")}%' for i, kw in enumerate(keywords)}
+                params.update({'limit': max_results, 'offset': offset})
+                with self.engine.connect() as conn:
+                    rows = conn.execute(sql_fallback, params).fetchall()
+                    results = _build_results(rows)
+                    return results, len(results)
+            
+            return [], 0
     
         # 原有的 title/content 查询逻辑保持不变...
         if not terms:
@@ -253,6 +311,16 @@ class XMLSearchEngine:
             ET.SubElement(record, "recordSchema").text = "news"
             ET.SubElement(record, "recordPacking").text = "xml"
             ET.SubElement(record, "recordPosition").text = str(idx)
+            
+            # 添加时间戳（供前端展示）
+            if r.get('time'):
+                time_val = r['time']
+                if hasattr(time_val, 'strftime'):
+                    time_str = time_val.strftime('%Y-%m-%d %H:%M:%S')
+                else:
+                    time_str = str(time_val)
+                datestamp = ET.SubElement(record, "datestamp")
+                datestamp.text = time_str
             
             rec_data = ET.SubElement(record, "recordData")
             if r['xml']:
@@ -391,6 +459,19 @@ ZH_STOPWORDS = {
     '毛利率', '净利率', '收益率', '回报率', '市盈率', '市净率',
 }
 
+# 中文精简停用词表（用于jieba分词后过滤虚词）
+ZH_STOPWORDS_SMALL = {
+    '的', '了', '和', '是', '在', '我', '有', '不', '人', '都', '也', '很', '到', '说', '要', '去', '你', '会', '着', '看', '好', '自己',
+    '这', '那', '这些', '那些', '这个', '那个', '之', '与', '及', '或', '但', '而', '因为', '所以', '因此', '如果', '即使', '虽然', '尽管',
+    '由', '被', '把', '给', '让', '向', '往', '自', '从', '到', '对', '关于', '对于', '为了', '通过', '作为', '随着', '根据', '由于', '但是',
+    '并且', '同时', '其中', '其他', '相关', '一个', '一些', '此时', '此前', '之后', '后来', '近日', '日前', '目前', '现在', '当时', '当场',
+    '即将', '将要', '曾经', '一度', '一直', '不断', '逐渐', '进一步', '继续', '持续', '保持', '进行', '表示', '认为', '已经', '开始',
+    '今年', '去年', '正在', '成为', '需要', '可以', '没有', '年', '月', '日', '时', '分', '秒',
+    '一', '二', '三', '四', '五', '六', '七', '八', '九', '十',
+    '们', '它', '他', '她', '地', '得', '下', '上', '中', '里', '内', '外', '间', '边', '面', '头', '部', '家', '个', '种', '类',
+    '第', '每', '各', '整', '等', '多', '大', '小', '高', '低', '长', '短', '来', '出', '起', '过', '回', '开', '放', '做', '打', '吃', '走', '跑',
+}
+
 # 英文停用词表（扩展版）
 EN_STOPWORDS = {
     'the', 'be', 'to', 'of', 'and', 'a', 'in', 'that', 'have', 'i', 'it', 'for', 'not', 'on', 'with', 'he', 'as', 'you', 'do', 'at', 'this', 'but', 'his', 'by', 'from', 'they', 'we', 'say', 'her', 'she', 'or', 'an', 'will', 'my', 'one', 'all', 'would', 'there', 'their', 'what', 'so', 'up', 'out', 'if', 'about', 'who', 'get', 'which', 'go', 'me', 'when', 'make', 'can', 'like', 'time', 'no', 'just', 'him', 'know', 'take', 'people', 'into', 'year', 'your', 'good', 'some', 'could', 'them', 'see', 'other', 'than', 'then', 'now', 'look', 'only', 'come', 'its', 'over', 'think', 'also', 'back', 'after', 'use', 'two', 'how', 'our', 'work', 'first', 'well', 'way', 'even', 'new', 'want', 'because', 'any', 'these', 'give', 'day', 'most', 'us', 'is', 'was', 'are', 'were', 'been', 'has', 'had', 'did', 'does', 'doing', 'done',
@@ -430,12 +511,12 @@ MEANLESS_PATTERNS = [
 def is_meaningless_phrase(phrase):
     """
     判断一个词组是否无意义（破碎词组或常见术语）
+    仅对完全匹配的破碎词进行过滤，避免子串误杀正常短语
     """
-    # 检查是否是破碎的财务术语
-    fragmented_terms = ['归母净', '母净利', '归母利', '母净利润', '净利润', '同比增', '比增长', '环比增']
+    # 检查是否是破碎的财务术语（精确匹配）
+    fragmented_terms = ['归母净', '母净利', '归母利', '母净利润', '同比增', '比增长', '环比增']
     for term in fragmented_terms:
-        if phrase == term or phrase in term or term in phrase:
-            # 检查是否是完整术语
+        if phrase == term:
             if phrase not in ['归母净利润', '同比增长', '环比下降', '营业收入']:
                 return True
     
@@ -447,105 +528,188 @@ def is_meaningless_phrase(phrase):
     return False
 
 
+def _lcs_length(a, b):
+    """求两个字符串的最长公共连续子串长度"""
+    m, n = len(a), len(b)
+    if m == 0 or n == 0:
+        return 0
+    max_len = 0
+    # 只需要一维DP
+    dp = [0] * (n + 1)
+    for i in range(1, m + 1):
+        prev = 0
+        for j in range(1, n + 1):
+            temp = dp[j]
+            if a[i-1] == b[j-1]:
+                dp[j] = prev + 1
+                max_len = max(max_len, dp[j])
+            else:
+                dp[j] = 0
+            prev = temp
+    return max_len
+
+
 def merge_overlapping_ngrams(ngrams_with_scores):
     """
-    合并重叠的n-gram，保留最长的、得分最高的短语
-    例如：["归母净", "母净利", "归母净利润"] -> ["归母净利润"]
+    合并重叠的n-gram，保留得分最高的短语。
+    重叠判定：子串包含，或最长公共连续子串超过较短者的40%。
     """
     if not ngrams_with_scores:
         return []
     
-    # 按长度降序，然后按得分降序
-    sorted_ngrams = sorted(ngrams_with_scores, key=lambda x: (-len(x[0]), -x[1]))
+    # 按得分降序，然后按长度降序
+    sorted_ngrams = sorted(ngrams_with_scores, key=lambda x: (-x[1], -len(x[0])))
     
     merged = []
-    used_chars = set()  # 记录已使用的字符位置
     
-    for ngram, score in sorted_ngrams:
-        # 检查是否与已合并的词重叠
+    for ngram, score, doc_freq in sorted_ngrams:
         is_overlapping = False
-        for merged_ngram, _ in merged:
-            # 如果一个是另一个的子串，跳过短的
+        for merged_ngram, _, _ in merged:
+            # 1. 子串包含
             if ngram in merged_ngram or merged_ngram in ngram:
                 is_overlapping = True
                 break
-            # 检查是否有大量字符重叠（超过50%）
-            overlap_count = sum(1 for c in ngram if c in merged_ngram)
-            if len(ngram) > 0 and overlap_count / len(ngram) > 0.5:
+            # 2. 最长公共连续子串过长
+            lcs = _lcs_length(ngram, merged_ngram)
+            shorter = min(len(ngram), len(merged_ngram))
+            if shorter > 0 and lcs / shorter > 0.4:
                 is_overlapping = True
                 break
         
         if not is_overlapping and not is_meaningless_phrase(ngram):
-            merged.append((ngram, score))
+            merged.append((ngram, score, doc_freq))
     
     return merged
 
 
 def extract_meaningful_phrases(title, news_id, phrases_dict):
     """
-    从标题中提取有意义的短语
-    使用更长的n-gram和更好的过滤策略
+    从中文标题中提取有意义的短语
+    纯jieba分词后按连续块组合（停用词/单字/数字为界），保证产物是原始标题的连续子串。
+    不再补充字符级n-gram，避免产生无意义碎片。
     """
-    # 只保留中文字符
-    chars = [c for c in title if '\u4e00' <= c <= '\u9fff']
-    
-    if len(chars) < 4:
+    if not title:
         return
     
-    # 提取 4-gram 到 6-gram（更长的短语更有可能是完整的概念）
-    for n in range(6, 3, -1):  # 从6-gram到4-gram
-        for i in range(len(chars) - n + 1):
-            phrase = ''.join(chars[i:i+n])
-            
-            # 过滤条件
-            # 1. 包含停用词
-            if any(c in ZH_STOPWORDS for c in phrase):
-                continue
-            
-            # 2. 是无意义短语
-            if is_meaningless_phrase(phrase):
-                continue
-            
-            # 3. 纯数字
-            if phrase.isdigit():
-                continue
-            
-            # 4. 日期格式
-            if re.match(r'^\d+年$|^\d+月$|^\d+日$', phrase):
-                continue
-            
-            # 添加到字典
-            if phrase not in phrases_dict:
-                phrases_dict[phrase] = {'count': 0, 'news_ids': set(), 'length': n}
-            phrases_dict[phrase]['news_ids'].add(news_id)
-            phrases_dict[phrase]['count'] = len(phrases_dict[phrase]['news_ids'])
+    # jieba未安装时降级为字符级4-gram
+    if not _JIEBA_AVAILABLE:
+        chars = [c for c in title if '\u4e00' <= c <= '\u9fff']
+        if len(chars) < 4:
+            return
+        for n in range(6, 3, -1):
+            for i in range(len(chars) - n + 1):
+                phrase = ''.join(chars[i:i+n])
+                if is_meaningless_phrase(phrase):
+                    continue
+                if phrase.isdigit():
+                    continue
+                if re.match(r'^\d+年$|^\d+月$|^\d+日$', phrase):
+                    continue
+                if phrase not in phrases_dict:
+                    phrases_dict[phrase] = {'count': 0, 'news_ids': set(), 'length': n}
+                phrases_dict[phrase]['news_ids'].add(news_id)
+                phrases_dict[phrase]['count'] = len(phrases_dict[phrase]['news_ids'])
+        return
+    
+    # jieba分词后按连续块组合，确保产物在原始标题中连续出现
+    words = list(jieba.cut(title))
+    chunks = []
+    current_chunk = []
+    for w in words:
+        w = w.strip()
+        if not w:
+            continue
+        if w.isdigit():
+            if current_chunk:
+                chunks.append(current_chunk)
+                current_chunk = []
+            continue
+        if len(w) == 1 or w in ZH_STOPWORDS_SMALL or is_meaningless_phrase(w):
+            if current_chunk:
+                chunks.append(current_chunk)
+                current_chunk = []
+            continue
+        current_chunk.append(w)
+    if current_chunk:
+        chunks.append(current_chunk)
+    
+    norm_title = re.sub(r'\s+', '', title)
+    for chunk in chunks:
+        if len(chunk) < 2:
+            continue
+        # 如果整个chunk全是纯英文单词，跳过（英文有专门管道）
+        if all(re.match(r'^[a-zA-Z]+$', w) for w in chunk):
+            continue
+        
+        def _join_sub(words):
+            # 中英相邻时英文后加空格，中文相邻不加空格
+            res = words[0]
+            for w in words[1:]:
+                if re.search(r'[a-zA-Z]$', res) and re.match(r'[a-zA-Z]', w):
+                    res += ' ' + w
+                else:
+                    res += w
+            return res
+        
+        for n in range(3, 1, -1):
+            for i in range(len(chunk) - n + 1):
+                phrase = _join_sub(chunk[i:i+n])
+                if len(phrase) < 4:
+                    continue
+                # 验证去掉空格后确实是原始标题的子串
+                if re.sub(r'\s+', '', phrase) not in norm_title:
+                    continue
+                if phrase not in phrases_dict:
+                    phrases_dict[phrase] = {'count': 0, 'news_ids': set(), 'length': n}
+                phrases_dict[phrase]['news_ids'].add(news_id)
+                phrases_dict[phrase]['count'] = len(phrases_dict[phrase]['news_ids'])
+
+
+def extract_en_phrases(title, news_id, phrases_dict):
+    """从英文标题中提取2-gram和3-gram，并验证为原始标题的连续子串"""
+    lower_title = title.lower()
+    words = re.findall(r'\b[a-zA-Z]+\b', lower_title)
+    words = [w for w in words if len(w) >= 3 and w not in EN_STOPWORDS]
+    
+    for i in range(len(words) - 1):
+        phrase = words[i] + ' ' + words[i+1]
+        if len(phrase) < 4 or phrase not in lower_title:
+            continue
+        if phrase not in phrases_dict:
+            phrases_dict[phrase] = {'count': 0, 'news_ids': set(), 'length': 2}
+        phrases_dict[phrase]['news_ids'].add(news_id)
+        phrases_dict[phrase]['count'] = len(phrases_dict[phrase]['news_ids'])
+    
+    for i in range(len(words) - 2):
+        phrase = words[i] + ' ' + words[i+1] + ' ' + words[i+2]
+        if len(phrase) < 4 or phrase not in lower_title:
+            continue
+        if phrase not in phrases_dict:
+            phrases_dict[phrase] = {'count': 0, 'news_ids': set(), 'length': 3}
+        phrases_dict[phrase]['news_ids'].add(news_id)
+        phrases_dict[phrase]['count'] = len(phrases_dict[phrase]['news_ids'])
 
 
 @app.route('/api/stats/topics', methods=['GET'])
 def get_hot_topics():
     """
     获取近48小时内的热门话题 TOP 10
-    【优化版】使用更长的n-gram和重叠合并策略，提取更有意义的热点话题
-    返回格式: [{"name": "人工智能", "count": 156}, {"name": "气候变化", "count": 132}, ...]
+    中英文分开统计后合并，避免英文被中文挤出
+    中文使用jieba分词，英文使用2-gram/3-gram
     """
     try:
         with engine.connect() as conn:
-            # 获取近48小时的新闻标题
             result = conn.execute(text("""
-                SELECT 
-                    n.news_id,
-                    n.title,
-                    n.language
+                SELECT n.news_id, n.title, n.language
                 FROM news n
                 WHERE n.created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR)
                 ORDER BY n.created_at DESC
                 LIMIT 500
             """))
-            
             rows = result.fetchall()
             
-            # 提取有意义的短语
-            phrases_dict = {}
+            zh_phrases = {}
+            en_phrases = {}
             
             for row in rows:
                 news_id = row[0]
@@ -553,29 +717,10 @@ def get_hot_topics():
                 lang = row[2] or 'zh'
                 
                 if lang == 'zh':
-                    extract_meaningful_phrases(title, news_id, phrases_dict)
+                    extract_meaningful_phrases(title, news_id, zh_phrases)
                 else:
-                    # 英文：提取 2-gram 和 3-gram（词级别）
-                    words = re.findall(r'\b[a-zA-Z]+\b', title.lower())
-                    words = [w for w in words if len(w) >= 3 and w not in EN_STOPWORDS]
-                    
-                    # 2-gram
-                    for i in range(len(words) - 1):
-                        phrase = words[i] + ' ' + words[i+1]
-                        if phrase not in phrases_dict:
-                            phrases_dict[phrase] = {'count': 0, 'news_ids': set(), 'length': 2}
-                        phrases_dict[phrase]['news_ids'].add(news_id)
-                        phrases_dict[phrase]['count'] = len(phrases_dict[phrase]['news_ids'])
-                    
-                    # 3-gram
-                    for i in range(len(words) - 2):
-                        phrase = words[i] + ' ' + words[i+1] + ' ' + words[i+2]
-                        if phrase not in phrases_dict:
-                            phrases_dict[phrase] = {'count': 0, 'news_ids': set(), 'length': 3}
-                        phrases_dict[phrase]['news_ids'].add(news_id)
-                        phrases_dict[phrase]['count'] = len(phrases_dict[phrase]['news_ids'])
+                    extract_en_phrases(title, news_id, en_phrases)
             
-            # 获取国家名称列表用于过滤
             country_result = conn.execute(text("""
                 SELECT country_code, country_name, country_name_en 
                 FROM countries
@@ -589,42 +734,43 @@ def get_hot_topics():
                 if row[2]:
                     country_names.add(row[2].lower())
             
-            # 准备合并的数据
-            ngrams_with_scores = []
-            for phrase, data in phrases_dict.items():
-                doc_freq = data['count']
-                length = data['length']
-                
-                # 过滤条件
-                if len(phrase) < 4:  # 长度过滤
-                    continue
-                if phrase.isdigit():  # 纯数字
-                    continue
-                if re.match(r'^\d+年$|^\d+月$|^\d+日$', phrase):  # 日期格式
-                    continue
-                if phrase.lower() in country_codes or phrase in country_names:  # 国家名
-                    continue
-                if is_meaningless_phrase(phrase):  # 无意义短语
-                    continue
-                
-                # 调整得分：更长且出现频率高的短语得分更高
-                # 使用对数来平衡频率和长度的影响
-                score = doc_freq * (1 + 0.2 * length)
-                
-                if doc_freq >= 2:  # 至少出现在2条新闻中
-                    ngrams_with_scores.append((phrase, score, doc_freq))
+            def build_topics(phrases, min_freq):
+                ngrams = []
+                for phrase, data in phrases.items():
+                    doc_freq = data['count']
+                    length = data['length']
+                    if len(phrase) < 4:
+                        continue
+                    if phrase.isdigit():
+                        continue
+                    if re.match(r'^\d+年$|^\d+月$|^\d+日$', phrase):
+                        continue
+                    if phrase.lower() in country_codes or phrase in country_names:
+                        continue
+                    if is_meaningless_phrase(phrase):
+                        continue
+                    # 过滤纯英文无空格黏合词（如 oppositiongroupmembers）
+                    if re.fullmatch(r'[a-zA-Z]+', phrase) and len(phrase) > 10:
+                        continue
+                    score = doc_freq * (1 + 0.2 * length)
+                    if doc_freq >= min_freq:
+                        ngrams.append((phrase, score, doc_freq))
+                merged = merge_overlapping_ngrams(ngrams)
+                merged.sort(key=lambda x: x[1], reverse=True)
+                return merged
             
-            # 合并重叠的n-gram
-            merged_topics = merge_overlapping_ngrams(ngrams_with_scores)
+            zh_topics = build_topics(zh_phrases, 1)  # 中文门槛降到1，jieba长词重复率低
+            en_topics = build_topics(en_phrases, 1)  # 英文门槛保持1
             
-            # 按得分排序，取前10
-            merged_topics.sort(key=lambda x: x[1], reverse=True)
+            # 合并策略：中文优先，确保至少6个中文席位
             top_topics = []
-            for phrase, score, count in merged_topics[:10]:
-                top_topics.append({
-                    'name': phrase,
-                    'count': count
-                })
+            for phrase, score, count in zh_topics[:6]:
+                top_topics.append({'name': phrase, 'count': count})
+            for phrase, score, count in en_topics[:10 - len(top_topics)]:
+                top_topics.append({'name': phrase, 'count': count})
+            # 若英文不足，再用中文补
+            for phrase, score, count in zh_topics[6:10 - len(top_topics)]:
+                top_topics.append({'name': phrase, 'count': count})
             
             return jsonify(top_topics)
     except Exception as e:

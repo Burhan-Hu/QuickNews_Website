@@ -218,8 +218,8 @@ function parseSRUResponse(xmlText) {
       const summary = summaryElem ? extractCDATAOrText(summaryElem) : '';
       const country = metadataElem ? metadataElem.querySelector('country')?.textContent || '' : '';
       
-      // 从 record 中获取时间
-      const time = record.querySelector('recordPosition')?.textContent || '';
+      // 从 datestamp 获取时间
+      const time = record.querySelector('datestamp')?.textContent || '';
       
       newsList.push({
         id: parseInt(id) || newsList.length + 1,

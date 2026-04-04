@@ -268,7 +268,7 @@ INSERT INTO countries (country_code, country_name, country_name_en, latitude, lo
 ('SG', '新加坡', 'Singapore', 1.3521, 103.8198, '亚洲'),
 ('OM', '阿曼', 'Oman', 21.4735, 55.9754, '亚洲'),
 ('KW', '科威特', 'Kuwait', 29.3117, 47.4818, '亚洲'),
-('GE', '格鲁吉亚', 'Georgia', 32.1656, -82.9001, '亚洲'),
+('GE', '格鲁吉亚', 'Georgia', 42.3154, 43.3569, '亚洲'),
 ('MN', '蒙古', 'Mongolia', 46.8625, 103.8467, '亚洲'),
 ('AM', '亚美尼亚', 'Armenia', 40.0691, 45.0382, '亚洲'),
 ('QA', '卡塔尔', 'Qatar', 25.3548, 51.1839, '亚洲'),
@@ -491,6 +491,7 @@ INSERT INTO categories (category_name, category_code, color_code, sort_order) VA
 ('军事', 'military', '#9b59b6', 4), -- 紫色
 ('文化', 'culture', '#f39c12', 5),  -- 橙色
 ('体育', 'sports', '#1abc9c', 6),   -- 青色
+('其他', 'else', '#fdff57', 7);   -- 黄色
 -- E3. 插入实际使用的新闻来源（与爬取代码一致）
 -- NewsAPI来源（固定source为NewsAPI，不提供具体网址）
 INSERT INTO sources (source_name, source_url, source_type, language, reliability_score) VALUES
@@ -526,28 +527,22 @@ INSERT INTO sources (source_name, source_url, source_type, language, reliability
 -- country_keywords 表数据填充（完整版）
 INSERT IGNORE INTO country_keywords (country_code, keyword, weight_title, weight_content) VALUES
 -- 中国
-('CN', '中国', 3, 1), ('CN', '北京', 3, 1), ('CN', '上海', 3, 1), ('CN', '习近平', 3, 1),
+('CN', '中国', 3, 1), ('CN', '北京', 3, 1), ('CN', '上海', 3, 1), ('CN', '习近平', 3, 1), ('CN', '内蒙古', 3, 1),
 ('CN', 'China', 3, 1), ('CN', 'Chinese', 3, 1), ('CN', 'Beijing', 3, 1), ('CN', 'Shanghai', 3, 1),
 ('CN', 'A股', 3, 1),('CN', 'PLA', 3, 1),
 -- 美国
-('US', '美国', 3, 1), ('US', '华盛顿', 3, 1), ('US', '纽约', 3, 1), ('US', 'USA', 3, 1),
+('US', '美国', 3, 1), ('US', '华盛顿', 3, 1), ('US', '纽约', 3, 1), ('US', 'USA', 3, 1),('US', 'US', 3, 1),
 ('US', 'United States', 3, 1), ('US', 'CIA', 3, 1), ('US', '美军', 3, 1), ('US', 'White House', 3, 1),
 ('US', 'Trump', 3, 1), ('US', '加州', 3, 1), ('US', 'California', 3, 1),('US', 'NASA', 3, 1),('US', 'Alabama', 3, 1),
-('US', 'Alaska', 3, 1),('US', 'Arizona', 3, 1),
-('US', 'Arkansas', 3, 1),('US', 'Colorado', 3, 1),('US', 'Connecticut', 3, 1),('US', 'Delaware', 3, 1),
-('US', 'Florida', 3, 1),('US', 'Georgia', 3, 1),('US', 'Hawaii', 3, 1),
-('US', 'Idaho', 3, 1),('US', 'Illinois', 3, 1),
-('US', 'Indiana', 3, 1),('US', 'Kansas', 3, 1),('US', 'Kentucky', 3, 1),
-('US', 'Louisiana', 3, 1),('US', 'Maine', 3, 1),
-('US', 'Maryland', 3, 1),('US', 'Massachusetts', 3, 1),
+('US', 'Alaska', 3, 1),('US', 'Arizona', 3, 1),('US', 'Arkansas', 3, 1),('US', 'Colorado', 3, 1),('US', 'Connecticut', 3, 1),
+('US', 'Delaware', 3, 1),('US', 'Florida', 3, 1),('US', 'Georgia', 3, 1),('US', 'Hawaii', 3, 1),
+('US', 'Idaho', 3, 1),('US', 'Illinois', 3, 1),('US', 'Indiana', 3, 1),('US', 'Kansas', 3, 1),('US', 'Kentucky', 3, 1),
+('US', 'Louisiana', 3, 1),('US', 'Maine', 3, 1),('US', 'Maryland', 3, 1),('US', 'Massachusetts', 3, 1),
 ('US', 'Michigan', 3, 1),('US', 'Minnesota', 3, 1),('US', 'Mississippi', 3, 1),
 ('US', 'Missouri', 3, 1),('US', 'Montana', 3, 1),('US', 'Nebraska', 3, 1),('US', 'Nevada', 3, 1),('US', 'New Hampshire', 3, 1),('US', 'New Jersey', 3, 1),
-('US', 'New Mexico', 3, 1),('US', 'New York', 3, 1),
-('US', 'North Carolina', 3, 1),('US', 'North Dakota', 3, 1),('US', 'Ohio', 3, 1),
-('US', 'Oklahoma', 3, 1),('US', 'Oregon', 3, 1),
-('US', 'Pennsylvania', 3, 1),('US', 'Rhode Island', 3, 1),
-('US', 'Carolina', 3, 1),('US', 'Dakota', 3, 1),
-('US', 'Tennessee', 3, 1),('US', 'Texas', 3, 1),
+('US', 'New Mexico', 3, 1),('US', 'New York', 3, 1),('US', 'North Carolina', 3, 1),('US', 'North Dakota', 3, 1),('US', 'Ohio', 3, 1),
+('US', 'Oklahoma', 3, 1),('US', 'Oregon', 3, 1),('US', 'Pennsylvania', 3, 1),('US', 'Rhode Island', 3, 1),
+('US', 'Carolina', 3, 1),('US', 'Dakota', 3, 1),('US', 'Tennessee', 3, 1),('US', 'Texas', 3, 1),
 ('US', 'Utah', 3, 1),('US', 'Vermont', 3, 1),('US', 'Virginia', 3, 1),('US', 'Washington', 3, 1),
 ('US', 'West Virginia', 3, 1),('US', 'Wisconsin', 3, 1),('US', 'Wyoming', 3, 1),('US', 'Hollywood', 3, 1),
 ('US', 'MIT', 3, 1),('US', 'Yale', 3, 1),('US', 'Harvard', 3, 1),
@@ -592,7 +587,7 @@ INSERT IGNORE INTO country_keywords (country_code, keyword, weight_title, weight
 ('TJ', '塔吉克斯坦', 3, 1), ('TJ', '杜尚别', 3, 1), ('TJ', 'Tajikistan', 3, 1),
 ('TM', '土库曼斯坦', 3, 1), ('TM', '阿什哈巴德', 3, 1), ('TM', 'Turkmenistan', 3, 1),
 ('AZ', '阿塞拜疆', 3, 1), ('AZ', '巴库', 3, 1), ('AZ', 'Azerbaijan', 3, 1), ('AZ', 'Baku', 3, 1),
-('GE', '格鲁吉亚', 3, 1), ('GE', '第比利斯', 3, 1), ('GE', 'Georgia', 3, 1), ('GE', 'Tbilisi', 3, 1),
+('GE', '格鲁吉亚', 3, 1), ('GE', '第比利斯', 3, 1), ('GE', 'Tbilisi', 3, 1),
 ('AM', '亚美尼亚', 3, 1), ('AM', '埃里温', 3, 1), ('AM', 'Armenia', 3, 1), ('AM', 'Yerevan', 3, 1),
 #中东
 ('IL', '以色列', 3, 1), ('IL', '耶路撒冷', 3, 1), ('IL', '特拉维夫', 3, 1), ('IL', 'Israel', 3, 1),
@@ -926,7 +921,7 @@ CREATE PROCEDURE sp_save_news_complete(
     IN p_hint_country CHAR(2),
     IN p_hint_category VARCHAR(20),
     OUT p_news_id BIGINT,
-    OUT p_status VARCHAR(100)
+    OUT p_status VARCHAR(500)
 )
 proc_main: BEGIN
     DECLARE v_country_code CHAR(2) DEFAULT NULL;
@@ -968,6 +963,12 @@ proc_main: BEGIN
         LEAVE proc_main;
     END IF;
 
+    -- 48小时时间检查（数据库层最终拦截）
+    IF p_published_at IS NOT NULL AND p_published_at < DATE_SUB(NOW(), INTERVAL 48 HOUR) THEN
+        SET p_status = CONCAT('Rejected: Exceeds 48h limit (published: ', p_published_at, ')');
+        LEAVE proc_main;
+    END IF;
+
     -- 自动语言检测（如未指定）
     IF p_language IS NULL OR p_language = '' THEN
         IF p_title REGEXP '[一-龥]' THEN
@@ -995,65 +996,140 @@ proc_main: BEGIN
         SET p_status = CONCAT(p_status, ', Primary Country: ', v_country_code);
     END IF;
 
-    -- 分类识别逻辑
-    IF v_full_text LIKE '%科技%' OR v_full_text LIKE '%tech%' OR v_full_text LIKE '%AI%'
-       OR v_full_text LIKE '%人工智能%' OR v_full_text LIKE '%芯片%' OR v_full_text LIKE '%technology%'
-       OR v_full_text LIKE '%science%'    OR v_full_text LIKE '%科学%' OR v_full_text LIKE '%机器人%'
-       OR v_full_text LIKE '%航天%' OR v_full_text LIKE '%量子%' OR v_full_text LIKE '%中科院%'
-       OR v_full_text LIKE '%aerospace%' OR v_full_text LIKE '%大模型%' OR v_full_text LIKE '%材料%'THEN
-        SET v_category_code = 'tech';
-    ELSEIF v_full_text LIKE '%政治%' OR v_full_text LIKE '%politic%' OR v_full_text LIKE '%外交%'
-           OR v_full_text LIKE '%议会%' OR v_full_text LIKE '%人大%' OR v_full_text LIKE '%政协%'
-           OR v_full_text LIKE '%联合国%' OR v_full_text LIKE '%决议%' OR v_full_text LIKE '%UN%'
-           OR v_full_text LIKE '%election%' OR v_full_text LIKE '%游行%' OR v_full_text LIKE '%法律%'
-           OR v_full_text LIKE '%总理%' OR v_full_text LIKE '%chancellor%'
-           OR v_full_text LIKE '%总统%' OR v_full_text LIKE '%parade%' THEN
-        SET v_category_code = 'politics';
-    ELSEIF v_full_text LIKE '%经济%' OR v_full_text LIKE '%economy%' OR v_full_text LIKE '%金融%'
-           OR v_full_text LIKE '%财政%'   OR v_full_text LIKE '%finance%' OR v_full_text LIKE '%外贸%'
-           OR v_full_text LIKE '%股票%' OR v_full_text LIKE '%GDP%'  OR v_full_text LIKE '%物价%'
-           OR v_full_text LIKE '%上市%' OR v_full_text LIKE '%市值%'  OR v_full_text LIKE '%CPI%'
-           OR v_full_text LIKE '%A股%'  OR v_full_text LIKE '%美股%'  OR v_full_text LIKE '%央行%'
-           OR v_full_text LIKE '%trade%' OR v_full_text LIKE '%stock%' OR v_full_text LIKE '%市场%'
-           OR v_full_text LIKE '%融资%' OR v_full_text LIKE '%债%' OR v_full_text LIKE '%debt%'
-           OR v_full_text LIKE '%通胀%' OR v_full_text LIKE '%inflation%' OR v_full_text LIKE '%USD%'
-           OR v_full_text LIKE '%破产%' OR v_full_text LIKE '%投资%' THEN
-        SET v_category_code = 'economy';
-    ELSEIF v_full_text LIKE '%军事%' OR v_full_text LIKE '%military%' OR v_full_text LIKE '%武器%'
-           OR v_full_text LIKE '%war%' OR v_full_text LIKE '%航母%' OR v_full_text LIKE '%战机%'
-           OR v_full_text LIKE '%conflict%' OR v_full_text LIKE '%冲突%' OR v_full_text LIKE '%战争%'
-           OR v_full_text LIKE '%核武器%' OR v_full_text LIKE '%国防部%' OR v_full_text LIKE '%airstrike%'
-           OR v_full_text LIKE '%空袭%'  OR v_full_text LIKE '%陆军%' OR v_full_text LIKE '%海军%'
-           OR v_full_text LIKE '%轰炸%'  OR v_full_text LIKE '%潜艇%' OR v_full_text LIKE '%导弹%'
-           OR v_full_text LIKE '%missile%' OR v_full_text LIKE '%袭击%' OR v_full_text LIKE '%submarine%'
-           OR v_full_text LIKE '%空军%'  OR v_full_text LIKE '%海军陆战队%' OR v_full_text LIKE '%Navy%'
-           OR v_full_text LIKE '%battleship%'   OR v_full_text LIKE '%军费%' OR v_full_text LIKE '%征兵%'
-           OR v_full_text LIKE '%军事基地%' OR v_full_text LIKE '%军队%' THEN
-        SET v_category_code = 'military';
-    ELSEIF v_full_text LIKE '%体育%' OR v_full_text LIKE '%sports%' OR v_full_text LIKE '%足球%'
-           OR v_full_text LIKE '%奥运%' OR v_full_text LIKE '%Olympic%' OR v_full_text LIKE '%羽毛球%'
-           OR v_full_text LIKE '%游泳%' OR v_full_text LIKE '%CBA%'  OR v_full_text LIKE '%排球%'
-           OR v_full_text LIKE '%世界杯%' OR v_full_text LIKE '%NBA%' OR v_full_text LIKE '%乒乓球%' THEN
-        SET v_category_code = 'sports';
-    ELSEIF v_full_text LIKE '%文化%' OR v_full_text LIKE '%culture%' OR v_full_text LIKE '%文旅%'
-           OR v_full_text LIKE '%节日%' OR v_full_text LIKE '%电视剧%'  OR v_full_text LIKE '%电影%'
-           OR v_full_text LIKE '%games%' OR v_full_text LIKE '%游戏%' OR v_full_text LIKE '%宗教%'
-           OR v_full_text LIKE '%movie%' OR v_full_text LIKE '%文学%' OR v_full_text LIKE '%literature%'
-           OR v_full_text LIKE '%博物馆%' OR v_full_text LIKE '%演出%' THEN
-        SET v_category_code = 'culture';
-    ELSE
-        SET v_category_code = IFNULL(p_hint_category, 'international');
+    -- NewsAPI 来源分类强制映射（更准确）
+    IF p_source_id = 1 AND p_hint_category IS NOT NULL AND p_hint_category != '' THEN
+        SET @v_mapped_cat = NULL;
+        IF p_hint_category = 'technology' THEN SET @v_mapped_cat = 'tech';
+        ELSEIF p_hint_category = 'business' THEN SET @v_mapped_cat = 'economy';
+        ELSEIF p_hint_category = 'science' THEN SET @v_mapped_cat = 'tech';
+        ELSE SET @v_mapped_cat = 'else';  -- general / health 等未明确分类的归到 else
+        END IF;
+        
+        SELECT category_id INTO @v_cat_id 
+        FROM categories 
+        WHERE category_code COLLATE utf8mb4_unicode_ci = @v_mapped_cat COLLATE utf8mb4_unicode_ci 
+        LIMIT 1;
+        IF @v_cat_id IS NOT NULL THEN
+            INSERT IGNORE INTO news_categories (news_id, category_id, confidence) 
+            VALUES (p_news_id, @v_cat_id, 1.0);
+            SET p_status = CONCAT(p_status, ', Category: ', @v_mapped_cat);
+        END IF;
     END IF;
 
-    SELECT category_id INTO v_category_id
-    FROM categories
-    WHERE category_code COLLATE utf8mb4_unicode_ci = v_category_code COLLATE utf8mb4_unicode_ci
-    LIMIT 1;
+    -- ScienceDaily 来源强制归入科技分类
+    IF p_source_id = 18 THEN
+        SELECT category_id INTO @v_cat_id 
+        FROM categories 
+        WHERE category_code COLLATE utf8mb4_unicode_ci = 'tech' COLLATE utf8mb4_unicode_ci 
+        LIMIT 1;
+        IF @v_cat_id IS NOT NULL THEN
+            INSERT IGNORE INTO news_categories (news_id, category_id, confidence) 
+            VALUES (p_news_id, @v_cat_id, 1.0);
+            SET p_status = CONCAT(p_status, ', Category: tech');
+        END IF;
+    END IF;
 
-    IF v_category_id IS NOT NULL THEN
-        INSERT INTO news_categories (news_id, category_id, confidence)
-        VALUES (p_news_id, v_category_id, 1.0);
-        SET p_status = CONCAT(p_status, ', Category: ', v_category_code);
+    -- 分类识别逻辑（支持多分类）
+    -- 科技
+    IF  v_full_text LIKE '%学术%' OR v_full_text LIKE '%人工智能%' OR v_full_text LIKE '%芯片%' OR v_full_text LIKE '%OpenAI%'
+       OR v_full_text LIKE '%science%' OR v_full_text LIKE '%科学家%' OR v_full_text LIKE '%机器人%'
+       OR v_full_text LIKE '%航天%' OR v_full_text LIKE '%量子%' OR v_full_text LIKE '%中科院%'
+       OR v_full_text LIKE '%aerospace%' OR v_full_text LIKE '%天文%' OR v_full_text LIKE '%算力%' OR v_full_text LIKE '%大模型%'
+       OR v_full_text LIKE '%academic%' OR v_full_text LIKE '%科研%' THEN
+        SELECT category_id INTO @v_cat_id FROM categories WHERE category_code COLLATE utf8mb4_unicode_ci = 'tech' COLLATE utf8mb4_unicode_ci LIMIT 1;
+        IF @v_cat_id IS NOT NULL THEN
+            INSERT INTO news_categories (news_id, category_id, confidence) VALUES (p_news_id, @v_cat_id, 1.0);
+            SET p_status = CONCAT(p_status, ', Category: tech');
+        END IF;
+    END IF;
+
+    -- 政治
+    IF v_full_text LIKE '%政治%' OR v_full_text LIKE '%politic%' OR v_full_text LIKE '%diplomacy%'
+       OR v_full_text LIKE '%Parliament%' OR v_full_text LIKE '%人大%' OR v_full_text LIKE '%政协%'
+       OR v_full_text LIKE '%联合国%' OR v_full_text LIKE '%决议%' OR v_full_text LIKE '%UN%'
+       OR v_full_text LIKE '%election%' OR v_full_text LIKE '%游行%' OR v_full_text LIKE '%法律%'
+       OR v_full_text LIKE '%总理%' OR v_full_text LIKE '%chancellor%' OR v_full_text LIKE '%社会%'
+       OR v_full_text LIKE '%民意%' OR v_full_text LIKE '%society%' OR v_full_text LIKE '%总统%'
+       OR v_full_text LIKE '%parade%' OR v_full_text LIKE '%Senate%' OR v_full_text LIKE '%议会%'
+       OR v_full_text LIKE '%Parliament%' OR v_full_text LIKE '%议员%' OR v_full_text LIKE '%党%' THEN
+        SELECT category_id INTO @v_cat_id FROM categories WHERE category_code COLLATE utf8mb4_unicode_ci = 'politics' COLLATE utf8mb4_unicode_ci LIMIT 1;
+        IF @v_cat_id IS NOT NULL THEN
+            INSERT INTO news_categories (news_id, category_id, confidence) VALUES (p_news_id, @v_cat_id, 1.0);
+            SET p_status = CONCAT(p_status, ', Category: politics');
+        END IF;
+    END IF;
+
+    -- 经济
+    IF v_full_text LIKE '%经济%' OR v_full_text LIKE '%economy%' OR v_full_text LIKE '%金融%'
+       OR v_full_text LIKE '%财政%' OR v_full_text LIKE '%finance%' OR v_full_text LIKE '%外贸%'
+       OR v_full_text LIKE '%股票%' OR v_full_text LIKE '%GDP%' OR v_full_text LIKE '%物价%'
+       OR v_full_text LIKE '%上市%' OR v_full_text LIKE '%市值%' OR v_full_text LIKE '%CPI%'
+       OR v_full_text LIKE '%A股%' OR v_full_text LIKE '%美股%' OR v_full_text LIKE '%央行%'
+       OR v_full_text LIKE '%trade%' OR v_full_text LIKE '%stock%' OR v_full_text LIKE '%市场%'
+       OR v_full_text LIKE '%融资%' OR v_full_text LIKE '%国债%' OR v_full_text LIKE '%debt%'
+       OR v_full_text LIKE '%通胀%' OR v_full_text LIKE '%inflation%' OR v_full_text LIKE '%USD%'
+       OR v_full_text LIKE '%破产%' OR v_full_text LIKE '%投资%' OR v_full_text LIKE '%净利润%'
+       OR v_full_text LIKE '%供应链%' OR v_full_text LIKE '%企业%' OR v_full_text LIKE '%enterprise%' THEN
+        SELECT category_id INTO @v_cat_id FROM categories WHERE category_code COLLATE utf8mb4_unicode_ci = 'economy' COLLATE utf8mb4_unicode_ci LIMIT 1;
+        IF @v_cat_id IS NOT NULL THEN
+            INSERT INTO news_categories (news_id, category_id, confidence) VALUES (p_news_id, @v_cat_id, 1.0);
+            SET p_status = CONCAT(p_status, ', Category: economy');
+        END IF;
+    END IF;
+
+    -- 军事
+    IF v_full_text LIKE '%军事%' OR v_full_text LIKE '%military%' OR v_full_text LIKE '%武器%'
+       OR v_full_text LIKE '%war%' OR v_full_text LIKE '%航母%' OR v_full_text LIKE '%战机%'
+       OR v_full_text LIKE '%conflict%'  OR v_full_text LIKE '%战争%'OR v_full_text LIKE '%核武器%'
+       OR v_full_text LIKE '%国防部%' OR v_full_text LIKE '%airstrike%'
+       OR v_full_text LIKE '%空袭%' OR v_full_text LIKE '%陆军%' OR v_full_text LIKE '%海军%'
+       OR v_full_text LIKE '%轰炸%' OR v_full_text LIKE '%潜艇%' OR v_full_text LIKE '%导弹%'
+       OR v_full_text LIKE '%missile%' OR v_full_text LIKE '%袭击%' OR v_full_text LIKE '%submarine%'
+       OR v_full_text LIKE '%空军%' OR v_full_text LIKE '%海军陆战队%' OR v_full_text LIKE '%Navy%'
+       OR v_full_text LIKE '%battleship%' OR v_full_text LIKE '%军费%' OR v_full_text LIKE '%征兵%'
+       OR v_full_text LIKE '%军事基地%' OR v_full_text LIKE '%军队%' THEN
+        SELECT category_id INTO @v_cat_id FROM categories WHERE category_code COLLATE utf8mb4_unicode_ci = 'military' COLLATE utf8mb4_unicode_ci LIMIT 1;
+        IF @v_cat_id IS NOT NULL THEN
+            INSERT INTO news_categories (news_id, category_id, confidence) VALUES (p_news_id, @v_cat_id, 1.0);
+            SET p_status = CONCAT(p_status, ', Category: military');
+        END IF;
+    END IF;
+
+    -- 体育
+    IF v_full_text LIKE '%体育%' OR v_full_text LIKE '%sports%' OR v_full_text LIKE '%足球%'
+       OR v_full_text LIKE '%奥运%' OR v_full_text LIKE '%Olympic%' OR v_full_text LIKE '%羽毛球%'
+       OR v_full_text LIKE '%游泳%' OR v_full_text LIKE '%排球%'OR v_full_text LIKE '%世界杯%'
+       OR v_full_text LIKE '%NBA%' OR v_full_text LIKE '%乒乓球%'OR v_full_text LIKE '%篮球%'
+       OR v_full_text LIKE '%网球%' OR v_full_text LIKE '%田径%'  OR v_full_text LIKE '%basketball%'
+       OR v_full_text LIKE '%tennis%' OR v_full_text LIKE '%World Cup%' THEN
+        SELECT category_id INTO @v_cat_id FROM categories WHERE category_code COLLATE utf8mb4_unicode_ci = 'sports' COLLATE utf8mb4_unicode_ci LIMIT 1;
+        IF @v_cat_id IS NOT NULL THEN
+            INSERT INTO news_categories (news_id, category_id, confidence) VALUES (p_news_id, @v_cat_id, 1.0);
+            SET p_status = CONCAT(p_status, ', Category: sports');
+        END IF;
+    END IF;
+
+    -- 文化
+    IF v_full_text LIKE '%文化%' OR v_full_text LIKE '%culture%' OR v_full_text LIKE '%文旅%'
+       OR v_full_text LIKE '%节日%' OR v_full_text LIKE '%电视剧%' OR v_full_text LIKE '%电影%'
+       OR v_full_text LIKE '%games%' OR v_full_text LIKE '%游戏%' OR v_full_text LIKE '%宗教%'
+       OR v_full_text LIKE '%movie%' OR v_full_text LIKE '%文学%' OR v_full_text LIKE '%literature%'
+       OR v_full_text LIKE '%博物馆%' OR v_full_text LIKE '%演出%' OR v_full_text LIKE '%假期%'
+       OR v_full_text LIKE '%Museum%' THEN
+        SELECT category_id INTO @v_cat_id FROM categories WHERE category_code COLLATE utf8mb4_unicode_ci = 'culture' COLLATE utf8mb4_unicode_ci LIMIT 1;
+        IF @v_cat_id IS NOT NULL THEN
+            INSERT INTO news_categories (news_id, category_id, confidence) VALUES (p_news_id, @v_cat_id, 1.0);
+            SET p_status = CONCAT(p_status, ', Category: culture');
+        END IF;
+    END IF;
+
+    -- 兜底：没有任何分类匹配时，归入 else（其他）
+    IF (SELECT COUNT(*) FROM news_categories WHERE news_id = p_news_id) = 0 THEN
+        SELECT category_id INTO @v_cat_id FROM categories WHERE category_code COLLATE utf8mb4_unicode_ci = IFNULL(p_hint_category, 'else') COLLATE utf8mb4_unicode_ci LIMIT 1;
+        IF @v_cat_id IS NOT NULL THEN
+            INSERT INTO news_categories (news_id, category_id, confidence) VALUES (p_news_id, @v_cat_id, 1.0);
+            SET p_status = CONCAT(p_status, ', Category: ', IFNULL(p_hint_category, 'else'));
+        END IF;
     END IF;
 
     -- 【重要】不在这里构建索引，由Python分词后调用sp_build_xml_index

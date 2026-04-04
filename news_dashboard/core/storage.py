@@ -16,6 +16,12 @@ class NewsStorage:
         trans = conn.begin()
         
         try:
+            # 预处理：用内容识别出的主要关联国覆盖 hint_country
+            # 确保 XML 索引和后续查询中显示的是内容分析后的国家，而非媒体默认地区
+            related_countries = article.get('related_countries', [])
+            if related_countries:
+                article['hint_country'] = related_countries[0][0]
+            
             # 步骤1：保存新闻主数据（返回news_id和language）
             result = conn.execute(
                 text("""
@@ -61,7 +67,6 @@ class NewsStorage:
             )
             
             # 步骤3：只保存一个主要关联国（取消多关联国逻辑）
-            related_countries = article.get('related_countries', [])
             if related_countries:
                 country_code, _ = related_countries[0]  # 只取第一个（主要关联国）
                 

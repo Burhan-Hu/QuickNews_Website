@@ -1903,33 +1903,94 @@ class HTMLNewsFetcher:
                                     if content:
                                         break
                         
-                        # 提取图片 - BBC图片在 figure 标签内
+                        # 提取图片 - BBC新版结构：div[data-testid="hero-image|image"] 或 figure
                         images = []
-                        for figure in article_soup.find_all('figure'):
-                            img = figure.find('img')
-                            if img:
-                                src = img.get('src', '')
-                                if not src:
-                                    src = img.get('data-src', '')
+                        
+                        def _is_placeholder(src):
+                            if not src:
+                                return True
+                            return (
+                                'static.files.bbci.co.uk' in src.lower() or
+                                'news.files.bbci.co.uk' in src.lower() or
+                                'grey-placeholder' in src.lower() or
+                                'placeholder' in src.lower() or
+                                any(x in src.lower() for x in [
+                                    'icon', 'logo', 'avatar', '1x1', 'pixel',
+                                    'transparent', 'spacer', 'blank.gif', 'empty.gif', '.svg'
+                                ])
+                            )
+                        
+                        def _extract_img_url(img_tag):
+                            """从img标签提取有效URL，优先src，其次srcset，再其次data-src"""
+                            if not img_tag:
+                                return ''
+                            for attr in ['src', 'data-src']:
+                                val = img_tag.get(attr, '').strip()
+                                if val and not _is_placeholder(val):
+                                    return val
+                            srcset = img_tag.get('srcset', '').strip()
+                            if srcset:
+                                # 取srcset中最后一个（通常是最大分辨率）或第一个非placeholder
+                                for part in srcset.split(','):
+                                    url = part.strip().split(' ')[0]
+                                    if url and not _is_placeholder(url):
+                                        return url
+                            return ''
+                        
+                        # 收集所有图片容器：新版用 div[data-testid="image"/"hero-image"]，旧版用 figure
+                        image_containers = []
+                        for div in article_soup.find_all('div', {'data-testid': re.compile(r'^(hero-image|image)$')}):
+                            image_containers.append(div)
+                        for fig in article_soup.find_all('figure'):
+                            image_containers.append(fig)
+                        
+                        seen_urls = set()
+                        for container in image_containers:
+                            src = ''
+                            alt = ''
+                            
+                            # 1. 尝试 picture > source[srcset]
+                            picture = container.find('picture')
+                            if picture:
+                                for source in picture.find_all('source'):
+                                    srcset = source.get('srcset', '').strip()
+                                    if srcset:
+                                        for part in srcset.split(','):
+                                            url = part.strip().split(' ')[0]
+                                            if url and not _is_placeholder(url):
+                                                src = url
+                                                break
+                                    if src:
+                                        break
+                            
+                            # 2. 遍历容器内所有 img，跳过 placeholder，取第一个有效
+                            if not src:
+                                for img in container.find_all('img'):
+                                    url = _extract_img_url(img)
+                                    if url:
+                                        src = url
+                                        alt = img.get('alt', '')
+                                        break
+                            
+                            if src:
+                                if src.startswith('//'):
+                                    src = 'https:' + src
                                 
-                                if src:
-                                    if src.startswith('//'):
-                                        src = 'https:' + src
-                                    
-                                    # 过滤小图标
-                                    if any(x in src.lower() for x in ['icon', 'logo', 'avatar']):
-                                        continue
-                                    
-                                    caption = ''
-                                    caption_elem = figure.find('figcaption')
-                                    if caption_elem:
-                                        caption = caption_elem.get_text(strip=True)
-                                    
-                                    images.append({
-                                        'url': src,
-                                        'alt': img.get('alt', ''),
-                                        'caption': caption
-                                    })
+                                # 去重
+                                if src in seen_urls:
+                                    continue
+                                seen_urls.add(src)
+                                
+                                caption = ''
+                                caption_elem = container.find('figcaption')
+                                if caption_elem:
+                                    caption = caption_elem.get_text(strip=True)
+                                
+                                images.append({
+                                    'url': src,
+                                    'alt': alt,
+                                    'caption': caption
+                                })
                         
                         # 提取视频
                         videos = []
@@ -1985,6 +2046,7 @@ class HTMLNewsFetcher:
     def fetch_all_html_sources(self):
         """抓取所有HTML源（包括国内和国际）"""
         all_articles = []
+        
         # 国内源
         time.sleep(1)
         all_articles.extend(self.fetch_jiemian() or [])
