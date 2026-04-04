@@ -217,7 +217,10 @@ class XMLSearchEngine:
                     ORDER BY n.created_at DESC
                     LIMIT :limit OFFSET :offset
                 """)
-                params = {f'p{i}': f'%{kw.replace("%", "\\%").replace("_", "\\_")}%' for i, kw in enumerate(keywords)}
+                params = {}
+                for i, kw in enumerate(keywords):
+                    safe_kw = kw.replace('%', '\\%').replace('_', '\\_')
+                    params[f'p{i}'] = f'%{safe_kw}%'
                 params.update({'limit': max_results, 'offset': offset})
                 with self.engine.connect() as conn:
                     rows = conn.execute(sql_fallback, params).fetchall()
