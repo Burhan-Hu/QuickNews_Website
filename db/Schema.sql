@@ -1029,6 +1029,58 @@ proc_main: BEGIN
         END IF;
     END IF;
 
+    -- 强制来源分类：特定新闻源直接映射到固定分类，不再走关键词多分类
+    IF p_source_id = 10 THEN  -- 凤凰网-军事 -> 军事
+        SELECT category_id INTO @v_cat_id 
+        FROM categories 
+        WHERE category_code COLLATE utf8mb4_unicode_ci = 'military' COLLATE utf8mb4_unicode_ci 
+        LIMIT 1;
+        IF @v_cat_id IS NOT NULL THEN
+            INSERT IGNORE INTO news_categories (news_id, category_id, confidence) 
+            VALUES (p_news_id, @v_cat_id, 1.0);
+            SET p_status = CONCAT(p_status, ', Category: military');
+        END IF;
+        INSERT INTO api_request_logs (source_id, request_type, request_url, fetched_count, created_at)
+        VALUES (p_source_id, 'procedure_insert', p_source_url, 1, NOW());
+        SET p_status = 'Success';
+        SELECT p_news_id AS news_id, p_status AS status, v_lang AS detected_language;
+        LEAVE proc_main;
+    END IF;
+
+    IF p_source_id = 12 THEN  -- 经济日报 -> 经济
+        SELECT category_id INTO @v_cat_id 
+        FROM categories 
+        WHERE category_code COLLATE utf8mb4_unicode_ci = 'economy' COLLATE utf8mb4_unicode_ci 
+        LIMIT 1;
+        IF @v_cat_id IS NOT NULL THEN
+            INSERT IGNORE INTO news_categories (news_id, category_id, confidence) 
+            VALUES (p_news_id, @v_cat_id, 1.0);
+            SET p_status = CONCAT(p_status, ', Category: economy');
+        END IF;
+        INSERT INTO api_request_logs (source_id, request_type, request_url, fetched_count, created_at)
+        VALUES (p_source_id, 'procedure_insert', p_source_url, 1, NOW());
+        SET p_status = 'Success';
+        SELECT p_news_id AS news_id, p_status AS status, v_lang AS detected_language;
+        LEAVE proc_main;
+    END IF;
+
+    IF p_source_id = 7 THEN  -- FoxNews-Politics -> 政治
+        SELECT category_id INTO @v_cat_id 
+        FROM categories 
+        WHERE category_code COLLATE utf8mb4_unicode_ci = 'politics' COLLATE utf8mb4_unicode_ci 
+        LIMIT 1;
+        IF @v_cat_id IS NOT NULL THEN
+            INSERT IGNORE INTO news_categories (news_id, category_id, confidence) 
+            VALUES (p_news_id, @v_cat_id, 1.0);
+            SET p_status = CONCAT(p_status, ', Category: politics');
+        END IF;
+        INSERT INTO api_request_logs (source_id, request_type, request_url, fetched_count, created_at)
+        VALUES (p_source_id, 'procedure_insert', p_source_url, 1, NOW());
+        SET p_status = 'Success';
+        SELECT p_news_id AS news_id, p_status AS status, v_lang AS detected_language;
+        LEAVE proc_main;
+    END IF;
+
     -- 分类识别逻辑（支持多分类）
     -- 科技
     IF  v_full_text LIKE '%学术%' OR v_full_text LIKE '%人工智能%' OR v_full_text LIKE '%芯片%' OR v_full_text LIKE '%OpenAI%'
@@ -1038,7 +1090,7 @@ proc_main: BEGIN
        OR v_full_text LIKE '%academic%' OR v_full_text LIKE '%科研%' THEN
         SELECT category_id INTO @v_cat_id FROM categories WHERE category_code COLLATE utf8mb4_unicode_ci = 'tech' COLLATE utf8mb4_unicode_ci LIMIT 1;
         IF @v_cat_id IS NOT NULL THEN
-            INSERT INTO news_categories (news_id, category_id, confidence) VALUES (p_news_id, @v_cat_id, 1.0);
+            INSERT IGNORE INTO news_categories (news_id, category_id, confidence) VALUES (p_news_id, @v_cat_id, 1.0);
             SET p_status = CONCAT(p_status, ', Category: tech');
         END IF;
     END IF;
@@ -1054,7 +1106,7 @@ proc_main: BEGIN
        OR v_full_text LIKE '%Parliament%' OR v_full_text LIKE '%议员%' OR v_full_text LIKE '%党%' THEN
         SELECT category_id INTO @v_cat_id FROM categories WHERE category_code COLLATE utf8mb4_unicode_ci = 'politics' COLLATE utf8mb4_unicode_ci LIMIT 1;
         IF @v_cat_id IS NOT NULL THEN
-            INSERT INTO news_categories (news_id, category_id, confidence) VALUES (p_news_id, @v_cat_id, 1.0);
+            INSERT IGNORE INTO news_categories (news_id, category_id, confidence) VALUES (p_news_id, @v_cat_id, 1.0);
             SET p_status = CONCAT(p_status, ', Category: politics');
         END IF;
     END IF;
@@ -1072,7 +1124,7 @@ proc_main: BEGIN
        OR v_full_text LIKE '%供应链%' OR v_full_text LIKE '%企业%' OR v_full_text LIKE '%enterprise%' THEN
         SELECT category_id INTO @v_cat_id FROM categories WHERE category_code COLLATE utf8mb4_unicode_ci = 'economy' COLLATE utf8mb4_unicode_ci LIMIT 1;
         IF @v_cat_id IS NOT NULL THEN
-            INSERT INTO news_categories (news_id, category_id, confidence) VALUES (p_news_id, @v_cat_id, 1.0);
+            INSERT IGNORE INTO news_categories (news_id, category_id, confidence) VALUES (p_news_id, @v_cat_id, 1.0);
             SET p_status = CONCAT(p_status, ', Category: economy');
         END IF;
     END IF;
@@ -1090,7 +1142,7 @@ proc_main: BEGIN
        OR v_full_text LIKE '%军事基地%' OR v_full_text LIKE '%军队%' THEN
         SELECT category_id INTO @v_cat_id FROM categories WHERE category_code COLLATE utf8mb4_unicode_ci = 'military' COLLATE utf8mb4_unicode_ci LIMIT 1;
         IF @v_cat_id IS NOT NULL THEN
-            INSERT INTO news_categories (news_id, category_id, confidence) VALUES (p_news_id, @v_cat_id, 1.0);
+            INSERT IGNORE INTO news_categories (news_id, category_id, confidence) VALUES (p_news_id, @v_cat_id, 1.0);
             SET p_status = CONCAT(p_status, ', Category: military');
         END IF;
     END IF;
@@ -1104,7 +1156,7 @@ proc_main: BEGIN
        OR v_full_text LIKE '%tennis%' OR v_full_text LIKE '%World Cup%' THEN
         SELECT category_id INTO @v_cat_id FROM categories WHERE category_code COLLATE utf8mb4_unicode_ci = 'sports' COLLATE utf8mb4_unicode_ci LIMIT 1;
         IF @v_cat_id IS NOT NULL THEN
-            INSERT INTO news_categories (news_id, category_id, confidence) VALUES (p_news_id, @v_cat_id, 1.0);
+            INSERT IGNORE INTO news_categories (news_id, category_id, confidence) VALUES (p_news_id, @v_cat_id, 1.0);
             SET p_status = CONCAT(p_status, ', Category: sports');
         END IF;
     END IF;
@@ -1118,7 +1170,7 @@ proc_main: BEGIN
        OR v_full_text LIKE '%Museum%' THEN
         SELECT category_id INTO @v_cat_id FROM categories WHERE category_code COLLATE utf8mb4_unicode_ci = 'culture' COLLATE utf8mb4_unicode_ci LIMIT 1;
         IF @v_cat_id IS NOT NULL THEN
-            INSERT INTO news_categories (news_id, category_id, confidence) VALUES (p_news_id, @v_cat_id, 1.0);
+            INSERT IGNORE INTO news_categories (news_id, category_id, confidence) VALUES (p_news_id, @v_cat_id, 1.0);
             SET p_status = CONCAT(p_status, ', Category: culture');
         END IF;
     END IF;
@@ -1127,7 +1179,7 @@ proc_main: BEGIN
     IF (SELECT COUNT(*) FROM news_categories WHERE news_id = p_news_id) = 0 THEN
         SELECT category_id INTO @v_cat_id FROM categories WHERE category_code COLLATE utf8mb4_unicode_ci = IFNULL(p_hint_category, 'else') COLLATE utf8mb4_unicode_ci LIMIT 1;
         IF @v_cat_id IS NOT NULL THEN
-            INSERT INTO news_categories (news_id, category_id, confidence) VALUES (p_news_id, @v_cat_id, 1.0);
+            INSERT IGNORE INTO news_categories (news_id, category_id, confidence) VALUES (p_news_id, @v_cat_id, 1.0);
             SET p_status = CONCAT(p_status, ', Category: ', IFNULL(p_hint_category, 'else'));
         END IF;
     END IF;

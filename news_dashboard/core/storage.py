@@ -131,6 +131,7 @@ class NewsStorage:
             
             # 处理视频
             videos = article.get('videos', [])
+    
             for video in videos:
                 if isinstance(video, dict):
                     url = video.get('url', '') or video.get('src', '')

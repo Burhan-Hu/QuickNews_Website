@@ -1,40 +1,33 @@
-﻿from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, text
 from sqlalchemy.pool import QueuePool
 import os
-# Alwaysdata配置
-# TiDB Cloud Serverless配置
-ALWAYS_DATA_CONFIG = {
-    'host': 'mysql-quicknews.alwaysdata.net',  # 替换为你的host
-    'port': 3306,
-    'user': 'quicknews',  # 替换为你的用户名
-    'password': 'hbhhbh1010110',  # 替换为你的密码
-    'database': 'quicknews_maindb',
+
+# 数据库配置 - 优先从环境变量读取（ClawCloud 部署用）
+DB_CONFIG = {
+    'host': os.environ.get('DB_HOST', 'quicknews-db-mysql.ns-czp73szj.svc'),
+    'port': int(os.environ.get('DB_PORT', '3306')),
+    'user': os.environ.get('DB_USER', 'root'),
+    'password': os.environ.get('DB_PASSWORD', 'r958gtbz'),
+    'database': os.environ.get('DB_NAME', 'quicknews_maindb'),
 }
+
 def get_engine():
-    """
-    连接串格式：mysql+pymysql://user:password@host:port/database
-    """
-    # 【大作业连接串】截图以下这行进行分析：
+    """创建数据库连接引擎"""
     connection_string = (
-        f"mysql+pymysql://{ALWAYS_DATA_CONFIG['user']}:{ALWAYS_DATA_CONFIG['password']}"
-        f"@{ALWAYS_DATA_CONFIG['host']}:{ALWAYS_DATA_CONFIG['port']}"
-        f"/{ALWAYS_DATA_CONFIG['database']}"
+        f"mysql+pymysql://{DB_CONFIG['user']}:{DB_CONFIG['password']}"
+        f"@{DB_CONFIG['host']}:{DB_CONFIG['port']}"
+        f"/{DB_CONFIG['database']}"
     )
     
-    # 连接串各部分说明（用于报告）：
-    # mysql+pymysql://  - 驱动类型（MySQL + PyMySQL适配器）
-    # user:password@    - 身份认证信息
-    # host:port          - 服务器地址和端口（Alwaysdata法国服务器）
-    # /database          - 默认数据库名
+    print(f"[DB] 连接: {DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['database']}")
     
-    # 使用 connect_args 设置字符集和排序规则（解决存储过程collation冲突）
     engine = create_engine(
         connection_string,
         poolclass=QueuePool,
         pool_size=3,
         max_overflow=2,
         pool_pre_ping=True,
-        pool_recycle=3600,  # Alwaysdata连接1小时回收
+        pool_recycle=3600,
         connect_args={
             'charset': 'utf8mb4',
             'init_command': "SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci"
@@ -43,16 +36,23 @@ def get_engine():
     return engine
 
 engine = get_engine()
+
 def test_connection():
-    """测试连接函数（用于main.py启动检查）"""
+    """测试数据库连接并检查 Event Scheduler"""
     try:
         conn = engine.connect()
-        result = conn.execute(text("SELECT 'Alwaysdata Connected!', NOW(), DATABASE(), VERSION()"))
+        result = conn.execute(text("SELECT 'Connected!', NOW(), DATABASE(), VERSION(), @@event_scheduler"))
         row = result.fetchone()
-        print(f"[DB Test] {row[0]}")
-        print(f"[DB Test] 服务器时间: {row[1]}")
-        print(f"[DB Test] 当前数据库: {row[2]}")
-        print(f"[DB Test] MySQL版本: {row[3]}")
+        print(f"[DB Test] 状态: {row[0]}")
+        print(f"[DB Test] 时间: {row[1]}")
+        print(f"[DB Test] 数据库: {row[2]}")
+        print(f"[DB Test] 版本: {row[3]}")
+        print(f"[DB Test] Event Scheduler: {row[4]}")
+        
+        # 如果 Event Scheduler 关闭，打印警告
+        if row[4] != 'ON':
+            print("[DB Test] ⚠️ 警告: Event Scheduler 未开启，将依赖 Python 定时任务")
+        
         conn.close()
         return True
     except Exception as e:

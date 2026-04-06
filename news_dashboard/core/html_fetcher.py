@@ -70,119 +70,52 @@ class HTMLNewsFetcher:
     
     def fetch_xinhua(self):
         """
-        新华网-时政频道抓取 - 修复版：精准抓取正文区域内媒体
-        策略：只抓取 detailContent / article / main 内的图片，避免导航栏杂质
+        新华网-时政新闻抓取（https://www.news.cn/politics/szlb/index.html）
         """
-        url = 'http://www.xinhuanet.com/politics/'
+        from urllib.parse import urljoin
+        list_url = 'https://www.news.cn/politics/szlb/index.html'
         articles = []
 
         try:
-            print(f"[HTML] 抓取: 新华网-时政")
-            response = self.session.get(url, timeout=15)
+            print(f"[HTML] 抓取: 新华网-时政 ({list_url})")
+            response = self.session.get(list_url, timeout=15)
             response.encoding = 'utf-8'
             soup = BeautifulSoup(response.text, 'lxml')
-            
-            selectors = [
-                '.news-list li',
-                '.part-list li', 
-                '.data-list li',
-                '#news-list li',
-                '.list-item',
-                'h3 a[href*="/politics/"]',
-                'a[href*=".news.cn/politics/"]',
-                'a[href*="/2026"]'
-            ]
-            
-            news_items = []
-            for selector in selectors:
-                items = soup.select(selector)
-                if items:
-                    news_items = items[:50]
-                    break
-            
-            if not news_items:
-                news_items = soup.find_all('a', href=re.compile(r'news\.cn/politics/\d{8}/'))[:50]
 
-            for item in news_items:
+            items = soup.select('.list .item')
+            print(f"  [Debug] 列表页找到 {len(items)} 条")
+
+            for item in items[:30]:
                 try:
-                    if item.name == 'a':
-                        a_tag = item
-                    else:
-                        a_tag = item.find('a', href=re.compile(r'news\.cn|xinhuanet\.com'))
-                    
+                    a_tag = item.select_one('.tit a')
                     if not a_tag:
                         continue
-                    
+
                     title = a_tag.get_text(strip=True)
-                    link = a_tag.get('href', '').strip().replace(' ', '')
-                    
-                    if link.startswith('//'):
-                        link = 'http:' + link
-                    elif link.startswith('/'):
-                        link = 'http://www.xinhuanet.com' + link
-                    
-                    if not link or not re.search(r'(\d{8})/[a-f0-9]+/c\.html$', link):
+                    href = a_tag.get('href', '').strip()
+                    if not href:
                         continue
 
+                    link = urljoin('https://www.news.cn', href)
+                    if not re.search(r'(\d{8})/[a-f0-9]+/c\.html$', link):
+                        continue
+
+                    # 列表页时间
+                    list_time = item.select_one('.info .time')
                     pub_time = datetime.now()
-                    parent = item.find_parent()
-                    if parent:
-                        time_meta = parent.find('meta', attrs={'timestamp': True})
-                        if time_meta:
-                            try:
-                                pub_time = datetime.strptime(time_meta['timestamp'], '%Y-%m-%d %H:%M')
-                            except:
-                                pass
-                    
-                    date_match = re.search(r'/(\d{8})/', link)
-                    if date_match and 'time_meta' not in locals():
+                    if list_time:
                         try:
-                            pub_time = datetime.strptime(date_match.group(1), '%Y%m%d')
+                            pub_time = datetime.strptime(list_time.get_text(strip=True), '%Y-%m-%d')
                         except:
                             pass
 
                     print(f"  [Debug] 正在获取全文: {title[:30]}...")
-                    
-                    # 使用新华网专用的详情页抓取，而非通用方法
                     content, article_time, images, videos = self._fetch_xinhua_article_detail(link)
-                    
-                    if article_time != datetime.now():
+
+                    if article_time and article_time != datetime.now():
                         pub_time = article_time
 
-                    # 严格过滤：只保留明确在正文区域的图片（URL包含日期特征，且非二维码）
-                    valid_images = []
-                    for img in images:
-                        img_url = img['url']
-                        # 过滤二维码、图标、logo（强化规则）
-                        if any(x in img_url.lower() for x in ['qrcode', 'qr_code', 'detail', 'icon', 'logo', 'share', 'wechat', 'weibo', 'ad_', 'advert']):
-                            continue
-                        # 确保URL完整（新华图片通常是相对路径）
-                        if not img_url.startswith('http'):
-                            # 基于文章URL构建图片绝对路径
-                            # 文章URL格式: http://www.news.cn/20260325/xxxxx/c.html
-                            # 图片URL格式: 20260325xxxxx.jpg（同目录或上级目录）
-                            base_article_url = link.rsplit('/', 1)[0]  # 去掉/c.html
-                            if img_url.startswith('/'):
-                                # 绝对路径，补全域名
-                                if 'xinhuanet.com' in link:
-                                    img_url = 'http://www.xinhuanet.com' + img_url
-                                else:
-                                    img_url = 'http://www.news.cn' + img_url
-                            else:
-                                # 相对路径，基于文章目录
-                                img_url = base_article_url + '/' + img_url
-                        
-                        img['url'] = img_url
-                        valid_images.append(img)
-
-                    # 过滤视频URL（确保是有效的mp4或m3u8）
-                    valid_videos = []
-                    for vid in videos:
-                        vid_url = vid['url']
-                        if any(x in vid_url.lower() for x in ['.mp4', '.m3u8', 'vodpub', 'news.cn']):
-                            valid_videos.append(vid)
-
-                    if content:
+                    if content and len(content) >= 60:
                         articles.append({
                             'title': title[:300],
                             'summary': content[:500],
@@ -190,143 +123,177 @@ class HTMLNewsFetcher:
                             'source_url': link,
                             'source_name': '新华网-时政',
                             'published_at': pub_time,
-                            'image_url': valid_images[0]['url'] if valid_images else None,
-                            'images': valid_images,
-                            'videos': valid_videos,
+                            'image_url': images[0]['url'] if images else None,
+                            'images': images,
+                            'videos': videos,
                             'category_hint': 'politics',
                             'country_hint': 'CN',
                             'fetch_method': 'html_xinhua'
                         })
-                        print(f"  [Debug] ✓ 成功: {title[:20]}... ({len(content)}字, {len(valid_images)}图, {len(valid_videos)}视频)")
+                        print(f"  [Debug] ✓ 成功: {title[:20]}... ({len(content)}字, {len(images)}图, {len(videos)}视频)")
                     else:
                         print(f"  [Debug] ✗ 内容太短: {title[:20]}")
-                    
+
                     time.sleep(1)
-                    
                 except Exception as e:
                     print(f"  [Debug] 解析单条失败: {e}")
                     continue
-            
+
             print(f"[HTML] ✓ 新华网-时政: {len(articles)} 条")
             return articles
-            
+
         except Exception as e:
             print(f"[HTML] ✗ 新华网: {e}")
             import traceback
             traceback.print_exc()
             return []
-    
+
     def _fetch_xinhua_article_detail(self, url):
         """
-        新华网详情页专用解析：精准定位正文区域 detailContent
+        新华网详情页专用解析（news.cn 新版结构）
+        修复：
+        1. 视频抓取 - 支持 dhy-video 等新版视频格式
+        2. 图片过滤 - 只抓取正文相关图片，过滤二维码、头像等
         """
+        from urllib.parse import urljoin
         try:
+            print(f"    [Debug] 正在请求: {url}")
             response = self.session.get(url, timeout=10)
             response.encoding = 'utf-8'
-            soup = BeautifulSoup(response.text, 'lxml')
             
-            # 提取时间 - 优先meta timestamp
+            # 保存HTML内容供后续使用
+            html_text = response.text
+            
+            # 调试：检查HTML中是否包含关键视频标记
+            
+            # 检查原始HTML中video标签的数量（用正则）
+            video_tags_raw = re.findall(r'<video[^>]*>', html_text, re.IGNORECASE)
+            if video_tags_raw:
+                for i, tag in enumerate(video_tags_raw[:2]):
+                    print(f"      tag{i}: {tag[:100]}...")
+            
+            soup = BeautifulSoup(html_text, 'lxml')
+
+            # 提取时间
             pub_time = datetime.now()
-            time_meta = soup.find('meta', attrs={'timestamp': True})
-            if time_meta:
-                try:
-                    pub_time = datetime.strptime(time_meta['timestamp'], '%Y-%m-%d %H:%M')
-                except:
-                    pass
-            else:
-                time_elem = soup.find('time') or soup.select_one('.h-time, .info-source')
-                if time_elem:
-                    time_text = time_elem.get_text()
-                    match = re.search(r'(\d{4}[-年]\d{2}[-月]\d{2}[^\d]*\d{2}:\d{2})', time_text)
-                    if match:
-                        try:
-                            time_str = match.group(1).replace('年', '-').replace('月', '-').replace('日', ' ')
-                            pub_time = datetime.strptime(time_str.strip(), '%Y-%m-%d %H:%M')
-                        except:
-                            pass
-            
-            # 提取正文 - 严格限定在 detailContent 或 articleContent
+            date_meta = soup.find('meta', {'name': 'publishdate'})
+            if date_meta:
+                date_str = date_meta.get('content', '').strip()
+                time_elem = soup.select_one('.time')
+                time_str = time_elem.get_text(strip=True) if time_elem else ''
+                full_time = f"{date_str} {time_str}".strip()
+                for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M', '%Y-%m-%d'):
+                    try:
+                        pub_time = datetime.strptime(full_time, fmt)
+                        break
+                    except:
+                        continue
+
+            # 提取正文
             content = ''
-            content_container = None
-            
-            # 优先查找 detailContent（新华网标准正文容器）
-            content_container = soup.select_one('#detailContent, #detail, .article-content, article')
-            
+            content_container = soup.select_one('#detailContent')
             if content_container:
-                # 清理脚本和样式
-                for tag in content_container.find_all(['script', 'style', 'iframe', 'nav', 'header', 'footer']):
+                for tag in content_container.find_all(['script', 'style']):
                     tag.decompose()
-                
-                # 提取段落
-                texts = []
-                for p in content_container.find_all(['p', 'div']):
+                paragraphs = []
+                for p in content_container.find_all('p'):
                     text = p.get_text(strip=True)
-                    if text and len(text) > 3:
-                        texts.append(text)
-                
-                # 去重
-                seen = set()
-                unique_texts = []
-                for t in texts:
-                    if t not in seen and not t.endswith(('纠错', '编辑：', '责任编辑')):
-                        seen.add(t)
-                        unique_texts.append(t)
-                content = '\n\n'.join(unique_texts)
-            
-            # 提取图片 - 只在正文容器内查找
+                    if text and len(text) > 1 and not text.endswith(('纠错', '编辑：', '责任编辑')):
+                        paragraphs.append(text)
+                content = '\n\n'.join(paragraphs)
+
+            # 提取图片（多种方式）
             images = []
-            if content_container:
-                for img in content_container.find_all('img'):
-                    src = img.get('src', '').strip()
-                    if not src:
-                        src = img.get('data-src', '').strip()
-                    
-                    if src:
-                        # 过滤明显的非正文图片（根据文件名特征）
-                        if any(x in src.lower() for x in ['qrcode', 'qr_', 'icon', 'logo', 'share', 'weibo', 'wechat']):
-                            continue
-                        images.append({
-                            'url': src,
-                            'alt': img.get('alt', ''),
-                            'caption': img.get('title', '')
-                        })
             
-            # 提取视频 - 查找 detailContent 内的 video 标签 或特定播放器div
-            videos = []
+            # 提取文章ID（从URL）
+            article_id_match = re.search(r'(\d{8})/([a-f0-9]+)/c\.html', url)
+            article_id = article_id_match.group(2) if article_id_match else None
+            
             if content_container:
-                # 方法1: 直接查找video标签
-                for video in content_container.find_all('video'):
-                    src = video.get('src', '').strip()
-                    if src:
-                        videos.append({
-                            'url': src,
-                            'type': 'direct',
-                            'platform': 'xinhua'
-                        })
-                    # 查找source子标签
-                    for source in video.find_all('source'):
-                        src = source.get('src', '').strip()
+                # 方式1: 查找figure标签内的图片
+                figures = content_container.find_all('figure')
+                print(f"    [ImageDebug] 找到 {len(figures)} 个 figure 标签")
+                for fig in figures:
+                    img = fig.find('img')
+                    if img:
+                        src = img.get('src', '').strip()
                         if src:
-                            videos.append({
-                                'url': src,
-                                'type': 'source',
-                                'platform': 'xinhua'
-                            })
+                            img_url = urljoin(url, src)
+                            images.append({'url': img_url, 'alt': img.get('alt', ''), 'caption': ''})
+            
+            # 方式2: 从HTML直接提取包含文章ID的图片（无论figure是否存在）
+            if article_id:
+                # 查找相对路径的图片（如 2026xxx/xxxxx.jpg）
+                img_pattern = rf'{article_id}_[^.]+\.(?:jpg|jpeg|png|gif)'
+                img_matches = re.findall(img_pattern, html_text, re.IGNORECASE)
+                for img_relative in img_matches:
+                    # 拼接成完整URL
+                    img_url = urljoin(url, img_relative)
+                    # 去重检查
+                    if not any(img['url'] == img_url for img in images):
+                        images.append({'url': img_url, 'alt': '', 'caption': ''})
                 
-                # 方法2: 查找新华网特定播放器（如DH-PLAYER）
-                for player_div in content_container.find_all('div', id=re.compile(r'DH-PLAYER|player')):
-                    video = player_div.find('video')
-                    if video:
-                        src = video.get('src', '').strip()
-                        if src and src not in [v['url'] for v in videos]:
-                            videos.append({
-                                'url': src,
-                                'type': 'player',
-                                'platform': 'xinhua'
-                            })
+                # 2. 查找p标签内的图片（部分旧格式文章）
+                for p in content_container.find_all('p'):
+                    # 检查p标签是否直接包含img（没有figure包装）
+                    p_img = p.find('img', recursive=False)
+                    if not p_img:
+                        # 尝试找直接子元素
+                        for child in p.children:
+                            if hasattr(child, 'name') and child.name == 'img':
+                                p_img = child
+                                break
+                    
+                    if p_img:
+                        src = p_img.get('src', '').strip()
+                        if src:
+                            img_url = urljoin(url, src)
+                            # 去重检查
+                            if not any(existing['url'] == img_url for existing in images):
+                                images.append({
+                                    'url': img_url,
+                                    'alt': p_img.get('alt', ''),
+                                    'caption': ''
+                                })
+                
+                # 3. 排除明显的非内容图片（书籍推荐区域）
+                # 移除bookList等区域的图片
+                for exclude_area in content_container.find_all(['div', 'section'], 
+                    class_=lambda x: x and any(cls in ' '.join(x).lower() 
+                    for cls in ['booklist', 'book-list', 'recommend', 'related-news', 'ad_'])):
+                    # 这些区域内的图片已经在上面被排除了（因为不在figure中）
+                    pass
+
+            # 提取视频（多种方式）
+            videos = []
             
+            # 方式1: 查找video_src属性（新华网特有格式）
+            video_src_matches = re.findall(r'video_src=["\'](https?://[^"\']+\.mp4[^"\']*)["\']', html_text)
+            for src in video_src_matches:
+                if src and not any(v['url'] == src for v in videos):
+                    videos.append({'url': src, 'type': 'mp4', 'platform': 'xinhua'})
+  
+            # 方式2: 查找所有video标签
+            if not videos:
+                all_video_tags = soup.find_all('video')
+                for video in all_video_tags:
+                    src = video.get('src', '').strip()
+                    if src and '.mp4' in src:
+                        video_url = urljoin(url, src)
+                        if not any(v['url'] == video_url for v in videos):
+                            videos.append({'url': video_url, 'type': 'mp4', 'platform': 'xinhua'})
+            
+            # 方式3: 直接从HTML中提取.mp4链接
+            if not videos:
+                mp4_urls = re.findall(r'https?://[^"\'<>\s]+\.mp4[^"\'<>\s]*', html_text)
+                for mp4_url in mp4_urls:
+                    if not any(v['url'] == mp4_url for v in videos):
+                        videos.append({'url': mp4_url, 'type': 'mp4', 'platform': 'xinhua'})
+            
+            print(f"    [VideoDebug] 视频提取完成: {len(videos)} 个视频")
+
             return content, pub_time, images, videos
-            
+
         except Exception as e:
             print(f"    [Error] 新华网详情页失败: {e}")
             return '', datetime.now(), [], []
@@ -2049,19 +2016,20 @@ class HTMLNewsFetcher:
         
         # 国内源
         time.sleep(1)
-        all_articles.extend(self.fetch_jiemian() or [])
         all_articles.extend(self.fetch_xinhua() or [])
+        #all_articles.extend(self.fetch_jiemian() or [])
+        
         all_articles.extend(self.fetch_cnn() or [])
-        all_articles.extend(self.fetch_globaltimes() or [])
+        #all_articles.extend(self.fetch_globaltimes() or [])
         
         # 国际源
-        all_articles.extend(self.fetch_bbc() or [])
+        #all_articles.extend(self.fetch_bbc() or [])
         time.sleep(1)
-        all_articles.extend(self.fetch_sciencedaily() or [])
+        #all_articles.extend(self.fetch_sciencedaily() or [])
         time.sleep(1)
         all_articles.extend(self.fetch_sputnik() or [])
         time.sleep(1)
-        all_articles.extend(self.fetch_nytimes_cn() or [])
+        #all_articles.extend(self.fetch_nytimes_cn() or [])
         time.sleep(1)
-        all_articles.extend(self.fetch_aljazeera() or [])
+        #all_articles.extend(self.fetch_aljazeera() or [])
         return all_articles
