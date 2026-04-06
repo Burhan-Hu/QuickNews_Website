@@ -20,10 +20,31 @@ class HTMLNewsFetcher:
     """
     国内网站HTML直接抓取（绕过过期RSS）- 修复版
     新增：对 WSJ/Reuters 等启用 TLS 指纹伪装的 curl_cffi 会话
+    新增：高反爬网站使用增强 Headers（绕过 ClawCloud IP 限制）
     """
+    
+    # 高反爬网站专用 Headers（模拟真实浏览器访问）
+    ANTI_CRAWL_HEADERS = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+        'Accept-Language': 'en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Cache-Control': 'max-age=0',
+        'DNT': '1',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-User': '?1',
+        'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Windows"',
+    }
     
     def __init__(self):
         self.session = requests.Session()
+        
         # 国内网站需要模拟浏览器，否则可能返回403或反爬页面
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -47,6 +68,26 @@ class HTMLNewsFetcher:
         if _CURL_CFFI_AVAILABLE and curl_requests is not None:
             return curl_requests.Session(impersonate="chrome120")
         return None
+    
+    def _get_anti_crawl_soup(self, url, timeout=15):
+        """
+        使用增强 Headers 获取页面（用于 CNN、ScienceDaily 等高反爬网站）
+        解决 ClawCloud 等容器平台 IP 被识别为云服务的问题
+        """
+        try:
+            # 使用新的 Session，避免复用可能被标记的 session
+            session = requests.Session()
+            session.headers.update(self.ANTI_CRAWL_HEADERS)
+            
+            response = session.get(url, timeout=timeout, allow_redirects=True)
+            response.raise_for_status()
+            response.encoding = 'utf-8'
+            
+            return BeautifulSoup(response.text, 'lxml')
+        except Exception as e:
+            # 使用 ASCII 安全的方式打印错误（避免 Windows 编码问题）
+            print(f"    [AntiCrawl] Request failed: {type(e).__name__}")
+            return None
     
     def _get_soup(self, url, timeout=15, use_curl=False, curl_session=None, headers=None):
         """
@@ -130,20 +171,20 @@ class HTMLNewsFetcher:
                             'country_hint': 'CN',
                             'fetch_method': 'html_xinhua'
                         })
-                        print(f"  [Debug] ✓ 成功: {title[:20]}... ({len(content)}字, {len(images)}图, {len(videos)}视频)")
+                        print(f"  [Debug] [OK] 成功: {title[:20]}... ({len(content)}字, {len(images)}图, {len(videos)}视频)")
                     else:
-                        print(f"  [Debug] ✗ 内容太短: {title[:20]}")
+                        print(f"  [Debug] [FAIL] 内容太短: {title[:20]}")
 
                     time.sleep(1)
                 except Exception as e:
                     print(f"  [Debug] 解析单条失败: {e}")
                     continue
 
-            print(f"[HTML] ✓ 新华网-时政: {len(articles)} 条")
+            print(f"[HTML] [OK] 新华网-时政: {len(articles)} 条")
             return articles
 
         except Exception as e:
-            print(f"[HTML] ✗ 新华网: {e}")
+            print(f"[HTML] [FAIL] 新华网: {e}")
             import traceback
             traceback.print_exc()
             return []
@@ -546,11 +587,13 @@ class HTMLNewsFetcher:
     def fetch_cnn(self):
         """CNN世界新闻抓取 - 修复版：区分视频页/文章页，过滤无用图片"""
         url = 'https://edition.cnn.com/world'
-        print(f"[HTML] 抓取: CNN-World")
+        print(f"[HTML] 抓取: CNN-World (使用增强Headers)")
         try:
-            response = self.session.get(url, timeout=20)
-            response.encoding = 'utf-8'
-            soup = BeautifulSoup(response.text, 'lxml')
+            # 使用增强 Headers 绕过 IP 限制
+            soup = self._get_anti_crawl_soup(url, timeout=20)
+            if not soup:
+                print(f"[HTML] [FAIL] CNN: cannot fetch page")
+                return []
 
             # 收集链接但过滤掉复杂页面（live-news等）
             candidate = self._gather_article_links(
@@ -598,36 +641,40 @@ class HTMLNewsFetcher:
                             'country_hint': 'US',
                             'fetch_method': 'html_cnn_v2'
                         })
-                        print(f"  [Debug] CNN ✓ 成功: {link} ({len(content)}字, {len(images)}图, {len(videos)}视频)")
+                        print(f"  [Debug] CNN [OK]: {link[:60]} ({len(content)} chars)")
                     else:
-                        print(f"  [Debug] CNN ✗ 内容太短: {link}")
+                        print(f"  [Debug] CNN [SKIP]: content too short")
                 except Exception as e:
                     print(f"  [Debug] CNN 失败: {e}")
                     continue
 
-            print(f"[HTML] ✓ CNN-World: {len(articles)} 条")
+            print(f"[HTML] [OK] CNN-World: {len(articles)} articles")
             return articles
         except Exception as e:
-            print(f"[HTML] ✗ CNN: {e}")
+            print(f"[HTML] [FAIL] CNN: {type(e).__name__}")
             return []
 
     def _fetch_cnn_article_detail(self, url):
         """
         CNN详情页专用解析：区分视频页和文章页，严格过滤图片
+        使用增强 Headers 绕过 IP 限制
         """
         try:
-            response = self.session.get(url, timeout=10)
-            response.encoding = 'utf-8'
-            soup = BeautifulSoup(response.text, 'lxml')
+            # 使用增强 Headers 获取页面
+            soup = self._get_anti_crawl_soup(url, timeout=10)
+            if not soup:
+                return '', datetime.now(), [], []
         
             # 判断页面类型
             is_video_page = '/video/' in url or bool(soup.find('div', {'data-component-name': 'video-resource'}))
         
-            if not is_video_page:
+            if is_video_page:
+                return self._fetch_cnn_video_page(soup, url)
+            else:
                 return self._fetch_cnn_article_page(soup, url)
             
         except Exception as e:
-            print(f"    [Error] CNN详情页失败: {e}")
+            print(f"    [Error] CNN detail failed: {type(e).__name__}")
             return '', datetime.now(), [], []
 
     def _fetch_cnn_article_page(self, soup, url):
@@ -731,6 +778,46 @@ class HTMLNewsFetcher:
                     'platform': 'cnn'
                 })
     
+        return content, pub_time, images, videos
+
+    def _fetch_cnn_video_page(self, soup, url):
+        """CNN视频页解析：提取视频信息和简介"""
+        content = ''
+        images = []
+        videos = []
+        pub_time = datetime.now()
+        
+        # 提取视频标题
+        title_elem = soup.find('h1') or soup.find('meta', {'property': 'og:title'})
+        video_title = ''
+        if title_elem:
+            video_title = title_elem.get_text(strip=True) if title_elem.name == 'h1' else title_elem.get('content', '')
+        
+        # 提取视频描述
+        desc_elem = soup.find('meta', {'name': 'description'}) or soup.find('meta', {'property': 'og:description'})
+        if desc_elem:
+            content = desc_elem.get('content', '')
+        
+        # 提取视频URL
+        video_elem = soup.find('div', {'data-component-name': 'video-resource'})
+        if video_elem:
+            # 查找视频源
+            for source in video_elem.find_all(['source', 'video']):
+                src = source.get('src', '') or source.get('data-src', '')
+                if src:
+                    videos.append({'url': src, 'type': 'mp4', 'title': video_title})
+                    break
+            # 如果没有找到，尝试找iframe
+            if not videos:
+                iframe = video_elem.find('iframe')
+                if iframe and iframe.get('src'):
+                    videos.append({'url': iframe.get('src'), 'type': 'iframe', 'title': video_title})
+        
+        # 提取缩略图
+        thumb_elem = soup.find('meta', {'property': 'og:image'})
+        if thumb_elem and thumb_elem.get('content'):
+            images.append({'url': thumb_elem.get('content'), 'alt': video_title, 'caption': ''})
+        
         return content, pub_time, images, videos
 
     def fetch_jiemian(self):
@@ -964,9 +1051,9 @@ class HTMLNewsFetcher:
                                     'country_hint': 'US',
                                     'fetch_method': 'html_aljazeera'
                                 })
-                                print(f"  [Debug] ✓ 成功 ({len(content)}字, {len(images)}图, {len(videos)}视频)")
+                                print(f"  [Debug] [OK] 成功 ({len(content)}字, {len(images)}图, {len(videos)}视频)")
                             else:
-                                print(f"  [Debug] ✗ 内容不足")
+                                print(f"  [Debug] [FAIL] 内容不足")
                             
                             time.sleep(1.5)
                         
@@ -975,15 +1062,15 @@ class HTMLNewsFetcher:
                             continue
                 
                 except Exception as e:
-                    print(f"[HTML] ✗ Al Jazeera-{category}: {e}")
+                    print(f"[HTML] [FAIL] Al Jazeera-{category}: {e}")
                 
                 time.sleep(2)
             
-            print(f"[HTML] ✓ Al Jazeera: {len(articles)} 条")
+            print(f"[HTML] [OK] Al Jazeera: {len(articles)} 条")
             return articles
         
         except Exception as e:
-            print(f"[HTML] ✗ Al Jazeera 总体失败: {e}")
+            print(f"[HTML] [FAIL] Al Jazeera 总体失败: {e}")
             return []
 
     def fetch_globaltimes(self):
@@ -1054,9 +1141,9 @@ class HTMLNewsFetcher:
                                     'country_hint': 'CN',
                                     'fetch_method': 'html_globaltimes'
                                 })
-                                print(f"  [Debug] ✓ 成功 ({len(content)}字, {len(images)}图, {len(videos)}视频)")
+                                print(f"  [Debug] [OK] 成功 ({len(content)}字, {len(images)}图, {len(videos)}视频)")
                             else:
-                                print(f"  [Debug] ✗ 内容不足: {len(content) if content else 0}字")
+                                print(f"  [Debug] [FAIL] 内容不足: {len(content) if content else 0}字")
                             
                             time.sleep(1.5)
                         
@@ -1065,15 +1152,15 @@ class HTMLNewsFetcher:
                             continue
                 
                 except Exception as e:
-                    print(f"[HTML] ✗ 环球时报-{channel}: {e}")
+                    print(f"[HTML] [FAIL] 环球时报-{channel}: {e}")
                 
                 time.sleep(2)
             
-            print(f"[HTML] ✓ 环球时报: {len(articles)} 条")
+            print(f"[HTML] [OK] 环球时报: {len(articles)} 条")
             return articles
         
         except Exception as e:
-            print(f"[HTML] ✗ 环球时报总体失败: {e}")
+            print(f"[HTML] [FAIL] 环球时报总体失败: {e}")
             return []
 
     def _fetch_globaltimes_article(self, url):
@@ -1188,18 +1275,17 @@ class HTMLNewsFetcher:
         """
         ScienceDaily HTML抓取 - 修复版（修复图片URL）
         网址: https://www.sciencedaily.com/news/
+        使用增强 Headers 绕过 IP 限制
         """
         url = 'https://www.sciencedaily.com/news/'
-        print(f"[HTML] 抓取: ScienceDaily")
+        print(f"[HTML] 抓取: ScienceDaily (使用增强Headers)")
         
         try:
-            response = self.session.get(url, timeout=15, headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            })
-            response.raise_for_status()
-            response.encoding = 'utf-8'
-            
-            soup = BeautifulSoup(response.text, 'lxml')
+            # 使用增强 Headers 获取页面
+            soup = self._get_anti_crawl_soup(url, timeout=15)
+            if not soup:
+                print(f"[HTML] [FAIL] ScienceDaily: 无法获取页面")
+                return []
             
             articles = []
             news_links = []
@@ -1237,12 +1323,11 @@ class HTMLNewsFetcher:
                     
                     print(f"  [ScienceDaily] 获取: {title[:50]}...")
                     
-                    # 抓取详情页
-                    article_resp = self.session.get(link, timeout=10, headers={
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                    })
-                    article_resp.encoding = 'utf-8'
-                    article_soup = BeautifulSoup(article_resp.text, 'lxml')
+                    # 抓取详情页（使用增强 Headers）
+                    article_soup = self._get_anti_crawl_soup(link, timeout=10)
+                    if not article_soup:
+                        print(f"    [ScienceDaily] 详情页获取失败")
+                        continue
                     
                     # 提取时间
                     pub_time = datetime.now()
@@ -1357,21 +1442,21 @@ class HTMLNewsFetcher:
                             'country_hint': 'US',
                             'fetch_method': 'html_sciencedaily'
                         })
-                        print(f"    ✓ {len(content)} 字, {len(images)} 图, {len(videos)} 视频")
+                        print(f"    [OK] {len(content)} 字, {len(images)} 图, {len(videos)} 视频")
                     else:
-                        print(f"    ✗ 内容太短: {len(content)} 字")
+                        print(f"    [FAIL] 内容太短: {len(content)} 字")
                     
                     time.sleep(1)
                     
                 except Exception as e:
-                    print(f"    ✗ 失败: {str(e)[:40]}")
+                    print(f"    [FAIL] 失败: {str(e)[:40]}")
                     continue
             
-            print(f"[HTML] ✓ ScienceDaily: {len(articles)} 条")
+            print(f"[HTML] [OK] ScienceDaily: {len(articles)} 条")
             return articles
             
         except Exception as e:
-            print(f"[HTML] ✗ ScienceDaily: {str(e)[:50]}")
+            print(f"[HTML] [FAIL] ScienceDaily: {str(e)[:50]}")
             return []
 
     def fetch_sputnik(self):
@@ -1552,23 +1637,23 @@ class HTMLNewsFetcher:
                                 'country_hint': 'RU',
                                 'fetch_method': 'html_sputnik'
                             })
-                            print(f"    ✓ 获取成功 ({len(content)}字, {len(images)}图, {len(videos)}视频)")
+                            print(f"    [OK] 获取成功 ({len(content)}字, {len(images)}图, {len(videos)}视频)")
                         else:
-                            print(f"    ✗ 内容为空")
+                            print(f"    [FAIL] 内容为空")
                         
                         time.sleep(1)
                         
                     except Exception as e:
-                        print(f"    ✗ 失败: {str(e)[:50]}")
+                        print(f"    [FAIL] 失败: {str(e)[:50]}")
                         continue
                 
                 time.sleep(1)
                 
             except Exception as e:
-                print(f"[HTML] ✗ 俄罗斯卫星通讯社 {url}: {str(e)[:50]}")
+                print(f"[HTML] [FAIL] 俄罗斯卫星通讯社 {url}: {str(e)[:50]}")
                 continue
         
-        print(f"[HTML] ✓ 俄罗斯卫星通讯社: 共 {len(all_articles)} 条")
+        print(f"[HTML] [OK] 俄罗斯卫星通讯社: 共 {len(all_articles)} 条")
         return all_articles
 
     def fetch_nytimes_cn(self):
@@ -1757,24 +1842,24 @@ class HTMLNewsFetcher:
                                 'country_hint': 'US',
                                 'fetch_method': 'html_nytimes_cn'
                             })
-                            print(f"    ✓ 获取成功 ({len(content)}字, {len(images)}图, {len(videos)}视频)")
+                            print(f"    [OK] 获取成功 ({len(content)}字, {len(images)}图, {len(videos)}视频)")
                         else:
-                            print(f"    ✗ 内容为空")
+                            print(f"    [FAIL] 内容为空")
                         
                         time.sleep(1.5)
                         
                     except Exception as e:
-                        print(f"    ✗ 失败: {str(e)[:40]}")
+                        print(f"    [FAIL] 失败: {str(e)[:40]}")
                         continue
                 
                 all_articles.extend(articles)
                 time.sleep(1)
                 
             except Exception as e:
-                print(f"[HTML] ✗ 纽约时报-中文 {url}: {str(e)[:50]}")
+                print(f"[HTML] [FAIL] 纽约时报-中文 {url}: {str(e)[:50]}")
                 continue
         
-        print(f"[HTML] ✓ 纽约时报-中文: 共 {len(all_articles)} 条")
+        print(f"[HTML] [OK] 纽约时报-中文: 共 {len(all_articles)} 条")
         return all_articles
 
     def fetch_bbc(self):
@@ -1989,23 +2074,23 @@ class HTMLNewsFetcher:
                                 'country_hint': 'GB',
                                 'fetch_method': 'html_bbc'
                             })
-                            print(f"    ✓ 获取成功 ({len(content)}字, {len(images)}图, {len(videos)}视频)")
+                            print(f"    [OK] 获取成功 ({len(content)}字, {len(images)}图, {len(videos)}视频)")
                         else:
-                            print(f"    ✗ 内容为空")
+                            print(f"    [FAIL] 内容为空")
                         
                         time.sleep(1)
                         
                     except Exception as e:
-                        print(f"    ✗ 失败: {str(e)[:50]}")
+                        print(f"    [FAIL] 失败: {str(e)[:50]}")
                         continue
                 
                 time.sleep(1)
                 
             except Exception as e:
-                print(f"[HTML] ✗ BBC {url}: {str(e)[:50]}")
+                print(f"[HTML] [FAIL] BBC {url}: {str(e)[:50]}")
                 continue
         
-        print(f"[HTML] ✓ BBC: 共 {len(all_articles)} 条")
+        print(f"[HTML] [OK] BBC: 共 {len(all_articles)} 条")
         return all_articles
 
 
