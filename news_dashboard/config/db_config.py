@@ -5,10 +5,10 @@ import os
 # 数据库配置 - 优先从环境变量读取（ClawCloud 部署用）
 # 本地开发可通过环境变量覆盖为 AlwaysData
 DB_CONFIG = {
-    'host': os.environ.get('DB_HOST', 'mysql-quicknews.alwaysdata.net'),
-    'port': int(os.environ.get('DB_PORT', 3306)),
-    'user': os.environ.get('DB_USER', 'quicknews'),
-    'password': os.environ.get('DB_PASSWORD', 'hbhhbh1010110'),
+    'host': os.environ.get('DB_HOST', 'quicknews-db-mysql.ns-czp73szj.svc'),
+    'port': int(os.environ.get('DB_PORT', '3306')),
+    'user': os.environ.get('DB_USER', 'root'),
+    'password': os.environ.get('DB_PASSWORD', 'r958gtbz'),
     'database': os.environ.get('DB_NAME', 'quicknews_maindb'),
 }
 
