@@ -2017,19 +2017,18 @@ class HTMLNewsFetcher:
         # 国内源
         time.sleep(1)
         all_articles.extend(self.fetch_xinhua() or [])
-        #all_articles.extend(self.fetch_jiemian() or [])
-        
+        all_articles.extend(self.fetch_jiemian() or [])
         all_articles.extend(self.fetch_cnn() or [])
-        #all_articles.extend(self.fetch_globaltimes() or [])
+        all_articles.extend(self.fetch_globaltimes() or [])
         
         # 国际源
-        #all_articles.extend(self.fetch_bbc() or [])
+        all_articles.extend(self.fetch_bbc() or [])
         time.sleep(1)
-        #all_articles.extend(self.fetch_sciencedaily() or [])
+        all_articles.extend(self.fetch_sciencedaily() or [])
         time.sleep(1)
         all_articles.extend(self.fetch_sputnik() or [])
         time.sleep(1)
-        #all_articles.extend(self.fetch_nytimes_cn() or [])
+        all_articles.extend(self.fetch_nytimes_cn() or [])
         time.sleep(1)
-        #all_articles.extend(self.fetch_aljazeera() or [])
+        all_articles.extend(self.fetch_aljazeera() or [])
         return all_articles

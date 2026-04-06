@@ -92,10 +92,10 @@ export default function About() {
             <h1 className="font-['Orbitron'] text-3xl text-white mb-2">
               <span className="text-[#00d4ff]">Quick</span>News
             </h1>
-            <p className="text-white/60">XML 检索系统</p>
+            <p className="text-white/60">数据库管理系统 XML检索系统</p>
             <div className="mt-3 flex items-center gap-3">
               <span className="px-3 py-1 rounded-full bg-[#00d4ff]/20 text-[#00d4ff] text-sm">
-                v1.0.0
+                v1.0.1
               </span>
             </div>
           </motion.div>
