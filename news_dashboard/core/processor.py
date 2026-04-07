@@ -20,22 +20,23 @@ class ContentProcessor:
     国家关键词支持从数据库 country_keywords 表加载，失败时使用内置默认值
     """
     
-    # source_name 到 source_id 的映射（与 schema2.sql 中的来源顺序一致）
+    # source_name 到 source_id 的映射（与 schema.sql 中的插入顺序一致）
+    # 注意：source_id 由数据库 INSERT 顺序决定，未启用的来源也占用 ID
     SOURCE_NAME_TO_ID = {
         # NewsAPI
         'NewsAPI': 1,
-        # RSS 来源
-        'iDaily': 2,
-        'RFI-中文': 3,
-        # HTML 爬取来源
-        '新华网-时政': 4,
-        '界面新闻': 5,
-        'Al Jazeera': 6,
-        '环球时报': 7,
-        '俄罗斯卫星通讯社': 8,
-        '纽约时报-中文': 9,
-        '纽约时报中文版': 9,
-        'BBC': 10,
+        # RSS 来源（2-14 为 RSS，其中部分旧来源未启用但仍占用ID）
+        'iDaily': 13,           # RSS - 每日环球视野
+        'RFI-中文': 14,          # RSS - 法国国际广播电台
+        # HTML 爬取来源（15-21）
+        '新华网-时政': 15,       # HTML
+        '界面新闻': 16,          # HTML
+        'Al Jazeera': 17,        # HTML - 半岛电视台
+        '环球时报': 18,          # HTML
+        '俄罗斯卫星通讯社': 19,   # HTML
+        '纽约时报-中文': 20,      # HTML
+        '纽约时报中文版': 20,     # HTML - 别名
+        'BBC': 21,               # HTML
         # 兼容 fetcher.py 中 NewsAPI 返回的名称
         'newsapi': 1,
     }
