@@ -355,32 +355,60 @@ class HTMLNewsFetcher:
             soup = BeautifulSoup(response.text, 'lxml')
 
             pub_time = datetime.now()
-            time_selectors = [
-                '.head-line span', '.info-source', 'span[data-time]',
-                '.post-time', 'time', '[id*="time"]', '[class*="date"]',
-                '.article__info-date', '.byline time', '[timestamp]'
-            ]
+            time_found = False
+            
+            # 先尝试从 Al Jazeera 的 article-dates 提取（格式: "5 Apr 2026"）
+            # 使用更精确的选择器，避免获取到 screen-reader-text 的内容
+            date_elem = soup.select_one('.article-dates .date-simple span[aria-hidden="true"]')
+            if not date_elem:
+                # 回退：尝试选择器，但清理文本
+                date_elem = soup.select_one('.article-dates .date-simple')
+            
+            if date_elem:
+                date_text = date_elem.get_text(strip=True)
+                # 清理文本：去除 "Published On" 等多余内容，只保留日期部分
+                # 使用正则提取 "数字 月份 年份" 格式
+                match = re.search(r'(\d{1,2}\s+[A-Za-z]{3,}\s+\d{4})', date_text)
+                if match:
+                    date_text = match.group(1)
+                try:
+                    # 格式: "5 Apr 2026"（没有分钟，默认为00:00）
+                    pub_time = date_parser.parse(date_text)
+                    time_found = True
+                except:
+                    pass
+            
+            # 如果没找到，尝试其他选择器
+            if not time_found:
+                time_selectors = [
+                    '.head-line span', '.info-source', 'span[data-time]',
+                    '.post-time', 'time', '[id*="time"]', '[class*="date"]',
+                    '.article__info-date', '.byline time', '[timestamp]'
+                ]
 
-            for selector in time_selectors:
-                elements = soup.select(selector)
-                for element in elements:
-                    if element.get('timestamp'):
-                        try:
-                            pub_time = datetime.strptime(element['timestamp'], '%Y-%m-%d %H:%M')
-                            break
-                        except:
-                            pass
-                    time_text = element.get_text()
-                    match = re.search(r'(\d{4}[-年]\d{2}[-月]\d{2}[^\d]*\d{2}:\d{2})', time_text)
-                    if match:
-                        try:
-                            time_str = match.group(1).replace('年', '-').replace('月', '-').replace('日', ' ')
-                            pub_time = datetime.strptime(time_str.strip(), '%Y-%m-%d %H:%M')
-                            break
-                        except:
-                            pass
-                if pub_time != datetime.now():
-                    break
+                for selector in time_selectors:
+                    elements = soup.select(selector)
+                    for element in elements:
+                        if element.get('timestamp'):
+                            try:
+                                pub_time = datetime.strptime(element['timestamp'], '%Y-%m-%d %H:%M')
+                                time_found = True
+                                break
+                            except:
+                                pass
+                        if not time_found:
+                            time_text = element.get_text()
+                            match = re.search(r'(\d{4}[-年]\d{2}[-月]\d{2}[^\d]*\d{2}:\d{2})', time_text)
+                            if match:
+                                try:
+                                    time_str = match.group(1).replace('年', '-').replace('月', '-').replace('日', ' ')
+                                    pub_time = datetime.strptime(time_str.strip(), '%Y-%m-%d %H:%M')
+                                    time_found = True
+                                    break
+                                except:
+                                    pass
+                    if time_found:
+                        break
 
             content_selectors = [
                 'article', 'main',
@@ -1177,19 +1205,37 @@ class HTMLNewsFetcher:
             soup = BeautifulSoup(response.text, 'html.parser')
             
             pub_time = datetime.now()
+            time_found = False
             # 查找时间元素
             for elem in soup.select('.pub_time, .author_share_left span[class*="time"], [class*="date"]'):
                 text = elem.get_text(strip=True)
-                match = re.search(r'(\d{4}[年/-]\d{2}[月/-]\d{2}[日]?)\s*(\d{2}:\d{2})?', text)
+                # 方法1: 匹配英文格式 "Apr 07, 2026 05:11 PM" 或 "Published: Apr 07, 2026"
+                # 改进：正确处理 AM/PM
+                match = re.search(r'(?:Published:\s*)?([A-Za-z]{3,}\s+\d{1,2},?\s+\d{4})\s*(\d{1,2}:\d{2})?\s*(AM|PM|am|pm)?', text)
                 if match:
                     try:
-                        time_str = match.group(1).replace('年', '-').replace('月', '-').replace('日', '')
-                        if match.group(2):
-                            time_str += ' ' + match.group(2)
-                        pub_time = date_parser.parse(time_str)
+                        date_str = match.group(1)
+                        time_str = match.group(2) if match.group(2) else '00:00'
+                        ampm = match.group(3) if match.group(3) else ''
+                        full_time = f"{date_str} {time_str} {ampm}".strip()
+                        pub_time = date_parser.parse(full_time)
+                        time_found = True
                         break
                     except:
                         pass
+                # 方法2: 匹配中文数字格式
+                if not time_found:
+                    match = re.search(r'(\d{4}[年/-]\d{2}[月/-]\d{2}[日]?)\s*(\d{2}:\d{2})?', text)
+                    if match:
+                        try:
+                            time_str = match.group(1).replace('年', '-').replace('月', '-').replace('日', '')
+                            if match.group(2):
+                                time_str += ' ' + match.group(2)
+                            pub_time = date_parser.parse(time_str)
+                            time_found = True
+                            break
+                        except:
+                            pass
             
             # 提取正文
             content = ''
@@ -1527,23 +1573,63 @@ class HTMLNewsFetcher:
                         
                         # 提取时间
                         pub_time = datetime.now()
-                        # 优先从meta标签提取
+                        time_found = False
+                        
+                        # 方法1: 优先从meta标签提取
                         time_meta = article_soup.find('meta', attrs={'timestamp': True})
                         if time_meta:
                             time_str = time_meta.get('timestamp')
                             try:
                                 pub_time = datetime.strptime(time_str, '%Y-%m-%d %H:%M')
+                                time_found = True
                             except:
                                 pass
                         
-                        # 如果没从meta获取到，尝试time标签
-                        if pub_time == datetime.now():
+                        # 方法2: 尝试time标签
+                        if not time_found:
                             time_elem = article_soup.find('time') or article_soup.select_one('[datetime]')
                             if time_elem and time_elem.get('datetime'):
                                 try:
                                     pub_time = date_parser.parse(time_elem['datetime'])
+                                    time_found = True
                                 except:
                                     pass
+                        
+                        # 方法3: 俄罗斯卫星通讯社专用 - 从 .article__info-date a 提取
+                        if not time_found:
+                            time_link = article_soup.select_one('.article__info-date a')
+                            if time_link:
+                                # 优先使用 data-unixtime 属性（最准确）
+                                unix_time = time_link.get('data-unixtime')
+                                if unix_time:
+                                    try:
+                                        pub_time = datetime.fromtimestamp(int(unix_time))
+                                        time_found = True
+                                    except:
+                                        pass
+                                # 如果 unixtime 失败，尝试解析文本
+                                if not time_found:
+                                    time_text = time_link.get_text(strip=True)
+                                    # 格式: "2026年3月31日, 17:50"
+                                    if time_text:
+                                        try:
+                                            pub_time = date_parser.parse(time_text)
+                                            time_found = True
+                                        except:
+                                            pass
+                        
+                        # 方法3: 俄罗斯卫星通讯社专用 - 从 .article__info-date a 提取
+                        if not time_found:
+                            time_link = article_soup.select_one('.article__info-date a')
+                            if time_link:
+                                time_text = time_link.get_text(strip=True)
+                                # 格式: "2026年3月27日, 16:45"
+                                if time_text:
+                                    try:
+                                        pub_time = date_parser.parse(time_text)
+                                        time_found = True
+                                    except:
+                                        pass
                         
                         # 提取正文 - 根据用户提供的HTML结构
                         content = ''
@@ -2121,16 +2207,16 @@ class HTMLNewsFetcher:
         
         # 国内源
         time.sleep(1)
-        all_articles.extend(self.fetch_xinhua() or [])
-        all_articles.extend(self.fetch_jiemian() or [])
-        all_articles.extend(self.fetch_globaltimes() or [])
+        #all_articles.extend(self.fetch_xinhua() or [])
+        #all_articles.extend(self.fetch_jiemian() or [])
+        #all_articles.extend(self.fetch_globaltimes() or [])
         
         # 国际源
-        all_articles.extend(self.fetch_bbc() or [])
+        #all_articles.extend(self.fetch_bbc() or [])
         time.sleep(1)
         all_articles.extend(self.fetch_sputnik() or [])
         time.sleep(1)
-        all_articles.extend(self.fetch_nytimes_cn() or [])
+        #all_articles.extend(self.fetch_nytimes_cn() or [])
         time.sleep(1)
-        all_articles.extend(self.fetch_aljazeera() or [])
+        #all_articles.extend(self.fetch_aljazeera() or [])
         return all_articles

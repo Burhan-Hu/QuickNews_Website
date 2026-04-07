@@ -120,6 +120,10 @@ class NewsScheduler:
         self.stats['indexed'] += total_saved
         
         print(f"[Job] 总计: 抓取{total_fetched}条, 保存{total_saved}条, 跳过{total_failed}条")
+        
+        # 强制垃圾回收，缓解内存泄漏
+        import gc
+        gc.collect()
     
     def job_rebuild_missing_index(self):
         """补充构建漏掉的索引"""

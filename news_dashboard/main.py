@@ -61,19 +61,6 @@ def main():
                 scheduler.stats['articles_saved'] += success
             else:
                 print("[Init] NewsAPI-Category本次未获取到数据")
-            
-            # 首次调用：国家轮询
-            api_articles_country, status2 = scheduler.fetcher.fetch_newsapi(mode='country')
-            if api_articles_country:
-                processed = [scheduler.processor.process_article(a) for a in api_articles_country]
-                processed = [a for a in processed if a is not None]
-                success, failed = scheduler.storage.save_articles(processed)
-                print(f"[Init] NewsAPI-Country保存: 成功{success}条, 跳过{failed}条")
-                scheduler.stats['api_requests_today'] += 1
-                scheduler.stats['articles_fetched'] += len(api_articles_country)
-                scheduler.stats['articles_saved'] += success
-            else:
-                print("[Init] NewsAPI-Country本次未获取到数据")
         else:
             print("\n[Init] NewsAPI未配置，跳过API抓取（仅使用RSS）")
         
