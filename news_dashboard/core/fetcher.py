@@ -256,9 +256,15 @@ class NewsFetcher:
                     # 清理HTML标签获取纯文本内容
                     content_text = strip_tags(raw_content) if raw_content else ''
                     
+                    # 获取并清洗标题
+                    title = entry.get('title', '无标题')
+                    # 针对 RFI-中文去除来源后缀，避免影响国家识别
+                    if source_config.get('name') == 'RFI-中文':
+                        title = title.replace(' - RFI - 法国国际广播电台', '').replace('RFI - 法国国际广播电台', '').strip()
+                    
                     # 不再检查长度，即使很短也传递给SQL（触发器会拦截<60的）
                     articles.append({
-                        'title': entry.get('title', '无标题')[:300],
+                        'title': title[:300],
                         'content': content_text[:20000],  # 仅截断防止过大，不做质量判断
                         'source_url': entry.get('link', ''),
                         'source_name': source_config['name'],
