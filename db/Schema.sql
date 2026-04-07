@@ -1016,8 +1016,8 @@ proc_main: BEGIN
         END IF;
     END IF;
 
-    -- ScienceDaily 来源强制归入科技分类
-    IF p_source_id = 18 THEN
+    -- 36氪 来源强制归入科技分类
+    IF p_source_id = 2 THEN
         SELECT category_id INTO @v_cat_id 
         FROM categories 
         WHERE category_code COLLATE utf8mb4_unicode_ci = 'tech' COLLATE utf8mb4_unicode_ci 

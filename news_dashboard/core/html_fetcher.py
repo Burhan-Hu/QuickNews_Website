@@ -996,7 +996,7 @@ class HTMLNewsFetcher:
         URL: https://www.aljazeera.com/
         """
         articles = []
-        categories = ['news', 'americas', 'asia', 'middle-east']
+        categories = ['news', 'americas', 'asia', 'middle-east','africa', 'europe']
         
         try:
             for category in categories:
