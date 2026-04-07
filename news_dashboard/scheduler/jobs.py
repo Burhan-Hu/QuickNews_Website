@@ -8,6 +8,9 @@ from core.processor import ContentProcessor
 from core.storage import NewsStorage
 from config.sources import NEWSAPI_CONFIG
 
+import time
+import sys
+
 class NewsScheduler:
     def __init__(self):
         self.scheduler = BackgroundScheduler()
@@ -23,6 +26,9 @@ class NewsScheduler:
             'failed': 0,              # 保存失败数
             'indexed': 0              # XML索引数
         }
+        
+        # 记录启动时间，用于24小时自动重启
+        self.start_time = time.time()
     
     def _process_and_save(self, articles, source_name):
         """处理并保存文章（流式处理，防止内存累积）"""
@@ -124,6 +130,12 @@ class NewsScheduler:
         # 强制垃圾回收，缓解内存泄漏
         import gc
         gc.collect()
+        
+        # 检查是否运行超过24小时（48轮），如果是则自动重启
+        elapsed_hours = (time.time() - self.start_time) / 3600
+        if elapsed_hours >= 24:
+            print(f"[Restart] 运行时间达到 {elapsed_hours:.1f} 小时，执行24小时自动重启")
+            sys.exit(0)  # 退出进程，ClawCloud会自动重启容器
     
     def job_rebuild_missing_index(self):
         """补充构建漏掉的索引"""

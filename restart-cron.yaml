@@ -1,0 +1,20 @@
+# Kubernetes CronJob：每24小时重启一次爬虫应用
+# 在ClawCloud中导入此配置
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: quick-news-restart
+spec:
+  schedule: "0 4 * * *"  # 每天凌晨4点执行（UTC时间）
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: kubectl
+            image: bitnami/kubectl:latest
+            command:
+            - /bin/sh
+            - -c
+            - "kubectl rollout restart deployment/quick-news -n default"
+          restartPolicy: OnFailure
