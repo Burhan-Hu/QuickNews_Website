@@ -44,7 +44,7 @@ def main():
         flask_thread = threading.Thread(target=start_flask_api, daemon=True)
         flask_thread.start()
         
-        """# 立即执行一次NewsAPI（类别+国家各一次）
+        # 立即执行一次NewsAPI（类别+国家各一次）
         from config.sources import NEWSAPI_CONFIG
         if NEWSAPI_CONFIG['api_key'] and 'your-newsapi-key' not in NEWSAPI_CONFIG['api_key']:
             print("\n[Init] 执行首次NewsAPI抓取...")
@@ -75,7 +75,7 @@ def main():
             else:
                 print("[Init] NewsAPI-Country本次未获取到数据")
         else:
-            print("\n[Init] NewsAPI未配置，跳过API抓取（仅使用RSS）")"""
+            print("\n[Init] NewsAPI未配置，跳过API抓取（仅使用RSS）")
         
         # 立即执行一次RSS
         print("\n[Init] 执行首次RSS抓取...")

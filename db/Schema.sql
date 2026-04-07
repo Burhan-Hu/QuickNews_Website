@@ -509,16 +509,16 @@ INSERT INTO sources (source_name, source_url, source_type, language, reliability
 ('NewYorker', 'https://feedx.net/rss/newyorker.xml', 'rss', 'en', 8),
 ('凤凰网-军事', 'https://feedx.net/rss/ifengmil.xml', 'rss', 'zh', 6),
 ('AP-美联社', 'https://feedx.net/rss/ap.xml', 'rss', 'en', 9),
-('经济日报', 'https://feedx.net/rss/jingjiribao.xml', 'rss', 'zh', 7);
+('经济日报', 'https://feedx.net/rss/jingjiribao.xml', 'rss', 'zh', 7),
+('iDaily', 'https://plink.anyfeeder.com/idaily/today', 'rss', 'zh', 7),
+('RFI-中文', 'https://plink.anyfeeder.com/rfi/cn', 'rss', 'zh', 8);
 
 -- HTML爬取来源
 INSERT INTO sources (source_name, source_url, source_type, language, reliability_score) VALUES
 ('新华网-时政', 'http://www.xinhuanet.com/politics/', 'crawler', 'zh', 9),
-('CNN', 'https://edition.cnn.com/world', 'crawler', 'en', 8),
 ('界面新闻', 'https://www.jiemian.com/lists/4.html', 'crawler', 'zh', 7),
 ('Al Jazeera', 'https://www.aljazeera.com/', 'crawler', 'en', 8),
 ('环球时报', 'https://www.globaltimes.cn/', 'crawler', 'zh', 7),
-('ScienceDaily', 'https://www.sciencedaily.com/news/', 'crawler', 'en', 8),
 ('俄罗斯卫星通讯社', 'https://sputniknews.cn/', 'crawler', 'zh', 7),
 ('纽约时报中文版', 'https://cn.nytimes.com/', 'crawler', 'zh', 8),
 ('BBC', 'https://www.bbc.com/news', 'crawler', 'en', 8);

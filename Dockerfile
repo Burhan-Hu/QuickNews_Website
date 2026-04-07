@@ -8,9 +8,9 @@ RUN npm run build
 FROM python:3.11-slim
 WORKDIR /app
 
-# Install system dependencies for lxml
+# Install system dependencies for lxml and curl_cffi
 RUN apt-get update && apt-get install -y \
-    libxml2-dev libxslt1-dev gcc \
+    libxml2-dev libxslt1-dev gcc libcurl4-openssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 COPY news_dashboard/requirements.txt ./

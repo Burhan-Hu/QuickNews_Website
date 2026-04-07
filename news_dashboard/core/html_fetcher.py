@@ -71,19 +71,25 @@ class HTMLNewsFetcher:
     
     def _get_anti_crawl_soup(self, url, timeout=15):
         """
-        使用增强 Headers 获取页面（用于 CNN、ScienceDaily 等高反爬网站）
+        使用 curl_cffi 获取页面（模拟真实浏览器 TLS 指纹）
         解决 ClawCloud 等容器平台 IP 被识别为云服务的问题
+        curl_cffi 可以绕过 Cloudflare/Akamai 的 TLS 指纹检测
         """
         try:
-            # 使用新的 Session，避免复用可能被标记的 session
-            session = requests.Session()
-            session.headers.update(self.ANTI_CRAWL_HEADERS)
-            
-            response = session.get(url, timeout=timeout, allow_redirects=True)
-            response.raise_for_status()
-            response.encoding = 'utf-8'
-            
-            return BeautifulSoup(response.text, 'lxml')
+            # 优先使用 curl_cffi（模拟 Chrome TLS 指纹）
+            if _CURL_CFFI_AVAILABLE and curl_requests is not None:
+                session = curl_requests.Session(impersonate="chrome120")
+                response = session.get(url, timeout=timeout)
+                response.raise_for_status()
+                return BeautifulSoup(response.text, 'lxml')
+            else:
+                # 回退到普通 requests（可能无法绕过严格检测）
+                session = requests.Session()
+                session.headers.update(self.ANTI_CRAWL_HEADERS)
+                response = session.get(url, timeout=timeout, allow_redirects=True)
+                response.raise_for_status()
+                response.encoding = 'utf-8'
+                return BeautifulSoup(response.text, 'lxml')
         except Exception as e:
             # 使用 ASCII 安全的方式打印错误（避免 Windows 编码问题）
             print(f"    [AntiCrawl] Request failed: {type(e).__name__}")
@@ -1469,6 +1475,7 @@ class HTMLNewsFetcher:
             'https://sputniknews.cn/politics/',
             'https://sputniknews.cn/world/',
             'https://sputniknews.cn/economy/',
+            'https://sputniknews.cn/video/',
         ]
         
         all_articles = []
@@ -1622,6 +1629,18 @@ class HTMLNewsFetcher:
                                 if src and not any(v['url'] == src for v in videos):
                                     videos.append({'url': src, 'type': 'source', 'platform': 'sputnik'})
                         
+                        # 查找og:video meta标签（俄罗斯卫星通讯社视频）
+                        og_video = article_soup.find('meta', property='og:video')
+                        if og_video:
+                            src = og_video.get('content', '').strip()
+                            if src:
+                                # 处理URL：去掉&后面的参数
+                                if '&' in src:
+                                    src = src.split('&')[0]
+                                # 避免重复添加
+                                if not any(v['url'] == src for v in videos):
+                                    videos.append({'url': src, 'type': 'mp4', 'platform': 'sputnik'})
+                        
                         # 保存数据
                         if content:
                             all_articles.append({
@@ -1667,6 +1686,7 @@ class HTMLNewsFetcher:
             'https://cn.nytimes.com/world/',
             'https://cn.nytimes.com/business/',
             'https://cn.nytimes.com/technology/',
+            'https://cn.nytimes.com/science/',
         ]
         
         all_articles = []
@@ -2103,13 +2123,10 @@ class HTMLNewsFetcher:
         time.sleep(1)
         all_articles.extend(self.fetch_xinhua() or [])
         all_articles.extend(self.fetch_jiemian() or [])
-        all_articles.extend(self.fetch_cnn() or [])
         all_articles.extend(self.fetch_globaltimes() or [])
         
         # 国际源
         all_articles.extend(self.fetch_bbc() or [])
-        time.sleep(1)
-        all_articles.extend(self.fetch_sciencedaily() or [])
         time.sleep(1)
         all_articles.extend(self.fetch_sputnik() or [])
         time.sleep(1)

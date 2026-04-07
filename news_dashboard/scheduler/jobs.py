@@ -94,9 +94,7 @@ class NewsScheduler:
         html_sources = [
             ("界面新闻", html_fetcher.fetch_jiemian),
             ("新华网", html_fetcher.fetch_xinhua),
-            ("CNN", html_fetcher.fetch_cnn),
             ("环球时报", html_fetcher.fetch_globaltimes),
-            ("ScienceDaily", html_fetcher.fetch_sciencedaily),
             ("Sputnik", html_fetcher.fetch_sputnik),
             ("纽约时报", html_fetcher.fetch_nytimes_cn),
             ("半岛电视台", html_fetcher.fetch_aljazeera),

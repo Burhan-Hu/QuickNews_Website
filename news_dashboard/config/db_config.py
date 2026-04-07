@@ -6,7 +6,7 @@ import os
 # 本地开发可通过环境变量覆盖为 AlwaysData
 DB_CONFIG = {
     'host': os.environ.get('DB_HOST', 'quicknews-db-mysql.ns-czp73szj.svc'),
-    'port': int(os.environ.get('DB_PORT', '3306')),
+    'port': int(os.environ.get('DB_PORT', 3306)),
     'user': os.environ.get('DB_USER', 'root'),
     'password': os.environ.get('DB_PASSWORD', 't958gtbz'),
     'database': os.environ.get('DB_NAME', 'quicknews_maindb'),

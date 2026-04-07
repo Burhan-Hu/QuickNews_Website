@@ -21,27 +21,30 @@ CATEGORY_ROTATION = [
 
 # 24个国家代码轮询（NewsAPI支持）
 COUNTRY_CODES = [
-    'vn', 'gb', 'jp', 'de', 'fr', 'au', 'ca', 'bl', 'in', 'kr',
+    'cn','jp', 'de', 'fr', 'au', 'ca', 'bl', 'in', 'kr',
     'br', 'mx', 'ru', 'it', 'es', 'nl', 'se', 'ch', 'at', 'be',
-    'nz', 'sg', 'za', 'ar'
+    'nz', 'sg', 'za', 'ar', 'us'
 ]
 
 # RSS源配置（作为NewsAPI补充，无限制）
 RSS_SOURCES = [
-    # 国内源（中文，优先）
-    #{'name': '36氪', 'url': 'https://36kr.com/feed', 'lang': 'zh', 'category': 'tech'},
-    #{'name': '虎嗅网', 'url': 'https://rss.aishort.top/?type=huxiu', 'lang': 'zh', 'category': 'tech'},
+     # 国内源（中文，优先）
+    {'name': '36氪', 'url': 'https://36kr.com/feed', 'lang': 'zh', 'category': 'tech'},
+    {'name': '虎嗅网', 'url': 'https://rss.aishort.top/?type=huxiu', 'lang': 'zh', 'category': 'tech'},
+    {'name': '凤凰网-军事', 'url': 'https://feedx.net/rss/ifengmil.xml', 'lang': 'zh', 'category': 'military', 'country_hint': 'CN'},
+    
     # 国际源
-    #{'name': 'RT-中文', 'url': 'https://www.rt.com/rss/news/', 'lang': 'en', 'category': 'international'},
-    #{'name': 'FoxNews-World', 'url': 'http://feeds.foxnews.com/foxnews/world','lang': 'en', 'category': 'international','country_hint': 'US'},
-    #{'name': '南华早报-SCMP', 'url': 'https://feedx.net/rss/scmp.xml', 'lang': 'en', 'category': 'international', 'country_hint': 'HK'},
-    #{'name': 'FoxNews-Politics', 'url': 'http://feeds.foxnews.com/foxnews/politics','lang': 'en', 'category': 'politics','country_hint': 'US'},
-    # 新增RSS源
-    #{'name': 'ChinaDaily', 'url': 'https://feedx.net/rss/chinadaily.xml', 'lang': 'en', 'category': 'international'},
-    #{'name': 'NewYorker', 'url': 'https://feedx.net/rss/newyorker.xml', 'lang': 'en', 'category': 'culture'},
-    #{'name': '凤凰网-军事', 'url': 'https://feedx.net/rss/ifengmil.xml', 'lang': 'zh', 'category': 'military', 'country_hint': 'CN'},
-    #{'name': 'AP-美联社', 'url': 'https://feedx.net/rss/ap.xml', 'lang': 'en', 'category': 'international', 'country_hint': 'US'},
-    #{'name': '经济日报', 'url': 'https://feedx.net/rss/jingjiribao.xml', 'lang': 'zh', 'category': 'business', 'country_hint': 'CN'}
+    {'name': 'RT-中文', 'url': 'https://www.rt.com/rss/news/', 'lang': 'en', 'category': 'politics'},
+    {'name': 'FoxNews-World', 'url': 'http://feeds.foxnews.com/foxnews/world','lang': 'en', 'category': 'politics','country_hint': 'US'},
+    {'name': '南华早报-SCMP', 'url': 'https://feedx.net/rss/scmp.xml', 'lang': 'en', 'category': 'politics', 'country_hint': 'HK'},
+    {'name': 'FoxNews-Politics', 'url': 'http://feeds.foxnews.com/foxnews/politics','lang': 'en', 'category': 'politics','country_hint': 'US'},
+
+    {'name': 'ChinaDaily', 'url': 'https://feedx.net/rss/chinadaily.xml', 'lang': 'en', 'category': 'politics'},
+    {'name': 'NewYorker', 'url': 'https://feedx.net/rss/newyorker.xml', 'lang': 'en', 'category': 'culture'},
+    {'name': 'AP-美联社', 'url': 'https://feedx.net/rss/ap.xml', 'lang': 'en', 'category': 'politics', 'country_hint': 'US'},
+    {'name': '经济日报', 'url': 'https://feedx.net/rss/jingjiribao.xml', 'lang': 'zh', 'category': 'economy', 'country_hint': 'CN'},
+    {'name': 'iDaily', 'url': 'https://plink.anyfeeder.com/idaily/today', 'lang': 'zh', 'category': 'politics'},
+    {'name': 'RFI-中文', 'url': 'https://plink.anyfeeder.com/rfi/cn', 'lang': 'zh', 'category': 'politics', 'country_hint': 'FR'},
 ]
 
 class NewsAPIRotator:
