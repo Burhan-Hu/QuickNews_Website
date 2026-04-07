@@ -8,7 +8,7 @@ DB_CONFIG = {
     'host': os.environ.get('DB_HOST', 'quicknews-db-mysql.ns-czp73szj.svc'),
     'port': int(os.environ.get('DB_PORT', '3306')),
     'user': os.environ.get('DB_USER', 'root'),
-    'password': os.environ.get('DB_PASSWORD', 'r958gtbz'),
+    'password': os.environ.get('DB_PASSWORD', 't958gtbz'),
     'database': os.environ.get('DB_NAME', 'quicknews_maindb'),
 }
 
