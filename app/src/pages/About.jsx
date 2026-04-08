@@ -95,7 +95,7 @@ export default function About() {
             <p className="text-white/60">数据库管理系统 XML检索系统</p>
             <div className="mt-3 flex items-center gap-3">
               <span className="px-3 py-1 rounded-full bg-[#00d4ff]/20 text-[#00d4ff] text-sm">
-                v1.2.0
+                v1.2.1
               </span>
             </div>
           </motion.div>

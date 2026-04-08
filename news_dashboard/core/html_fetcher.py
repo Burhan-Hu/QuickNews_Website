@@ -374,6 +374,9 @@ class HTMLNewsFetcher:
                 try:
                     # 格式: "5 Apr 2026"（没有分钟，默认为00:00）
                     pub_time = date_parser.parse(date_text)
+                    # 半岛电视台：时分秒使用当前时间
+                    now = datetime.now()
+                    pub_time = pub_time.replace(hour=now.hour, minute=now.minute, second=now.second)
                     time_found = True
                 except:
                     pass
@@ -472,6 +475,26 @@ class HTMLNewsFetcher:
             is_globaltimes = 'globaltimes.cn' in url
             is_sputnik = 'sputniknews.cn' in url
             is_nytimes_cn = 'cn.nytimes.com' in url
+
+            # 半岛电视台：从 <head> 中的 JSON-LD 提取视频地址
+            if is_aljazeera:
+                for script in soup.find_all('script', type='application/ld+json'):
+                    try:
+                        json_data = json.loads(script.string)
+                        # 可能是单个对象或对象列表
+                        items = json_data if isinstance(json_data, list) else [json_data]
+                        for item in items:
+                            if isinstance(item, dict) and item.get('@type') == 'VideoObject':
+                                content_url = item.get('contentUrl', '').strip()
+                                if content_url and content_url.endswith('.mp4'):
+                                    if not any(v['url'] == content_url for v in videos):
+                                        videos.append({
+                                            'url': content_url,
+                                            'type': 'mp4',
+                                            'platform': 'aljazeera'
+                                        })
+                    except (json.JSONDecodeError, AttributeError, TypeError):
+                        continue
 
             if content_container:
                 for img in content_container.find_all('img'):

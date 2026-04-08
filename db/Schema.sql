@@ -91,6 +91,7 @@ CREATE TABLE IF NOT EXISTS news (
 
     PRIMARY KEY (news_id),
     UNIQUE KEY uk_source_url (source_url),
+    UNIQUE KEY uk_title (title),  -- 标题去重：相同标题视为重复新闻
     INDEX idx_created_at (created_at),
     INDEX idx_source_time (source_id, created_at),
     INDEX idx_language (language, created_at),
@@ -951,7 +952,8 @@ proc_main: BEGIN
         LEAVE proc_main;
     END IF;
 
-    -- 去重检查
+    -- 去重检查：URL相同 或 标题相同，都视为重复
+    -- 检查1：source_url 是否已存在
     SELECT news_id INTO v_existing_id
     FROM news
     WHERE source_url COLLATE utf8mb4_unicode_ci = p_source_url COLLATE utf8mb4_unicode_ci
@@ -959,6 +961,18 @@ proc_main: BEGIN
 
     IF v_existing_id IS NOT NULL THEN
         SET p_status = CONCAT('Rejected: Duplicate URL (id:', v_existing_id, ')');
+        SET p_news_id = v_existing_id;
+        LEAVE proc_main;
+    END IF;
+    
+    -- 检查2：title 是否已存在（不同媒体互转同一新闻）
+    SELECT news_id INTO v_existing_id
+    FROM news
+    WHERE title COLLATE utf8mb4_unicode_ci = p_title COLLATE utf8mb4_unicode_ci
+    LIMIT 1;
+
+    IF v_existing_id IS NOT NULL THEN
+        SET p_status = CONCAT('Rejected: Duplicate Title (id:', v_existing_id, ')');
         SET p_news_id = v_existing_id;
         LEAVE proc_main;
     END IF;
