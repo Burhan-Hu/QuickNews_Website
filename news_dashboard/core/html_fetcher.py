@@ -485,14 +485,25 @@ class HTMLNewsFetcher:
                         items = json_data if isinstance(json_data, list) else [json_data]
                         for item in items:
                             if isinstance(item, dict) and item.get('@type') == 'VideoObject':
-                                content_url = item.get('contentUrl', '').strip()
-                                if content_url and content_url.endswith('.mp4'):
-                                    if not any(v['url'] == content_url for v in videos):
+                                # 优先抓取 embedUrl（Brightcove 播放器）
+                                embed_url = item.get('embedUrl', '').strip()
+                                if embed_url:
+                                    if not any(v['url'] == embed_url for v in videos):
                                         videos.append({
-                                            'url': content_url,
-                                            'type': 'mp4',
+                                            'url': embed_url,
+                                            'type': 'iframe',
                                             'platform': 'aljazeera'
                                         })
+                                # 备选：抓取 contentUrl（直接 MP4）
+                                else:
+                                    content_url = item.get('contentUrl', '').strip()
+                                    if content_url and content_url.endswith('.mp4'):
+                                        if not any(v['url'] == content_url for v in videos):
+                                            videos.append({
+                                                'url': content_url,
+                                                'type': 'mp4',
+                                                'platform': 'aljazeera'
+                                            })
                     except (json.JSONDecodeError, AttributeError, TypeError):
                         continue
 
