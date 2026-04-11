@@ -791,7 +791,7 @@ def get_topic_news(topic_id):
                 SELECT 
                     n.news_id, n.title, n.summary, n.source_url,
                     n.created_at, n.language, n.has_video,
-                    nc.is_representative,
+                    nt.is_representative,
                     (SELECT country_code FROM news_countries 
                      WHERE news_id = n.news_id AND is_primary = 1 LIMIT 1) as country
                 FROM news n
