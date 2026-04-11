@@ -949,29 +949,83 @@ def jaccard_similarity(set1, set2):
     union = len(set1 | set2)
     return intersection / union if union > 0 else 0.0
 
-def cluster_news_for_topics(news_list, similarity_threshold=0.15):
+def cluster_news_for_topics(news_list, similarity_threshold=0.28):
     """
-    基于Jaccard相似度对新闻进行聚类（优化版）
-    - 提高阈值过滤噪声
-    - 使用高质量共享关键词作为辅助判断
-    - 增强话题名生成与质量过滤
-    返回话题列表
+    基于TF-IDF+余弦相似度的簇中心聚类
+    - 标题关键词加权（权重=3倍正文）
+    - 簇中心聚类替代单链聚类，切断链式效应
+    - 保留高质量共享词作为兜底召回
+    返回话题列表（结构与旧版保持一致）
     """
+    import math
+    from collections import Counter
+    
     if not news_list or len(news_list) < 2:
         print(f"[Cluster] 新闻数量不足({len(news_list)}篇)，跳过聚类")
         return []
     
-    # 提取每篇新闻的关键词（增加内容长度以获得更多关键词）
+    TITLE_WEIGHT = 3
+    
+    # 分别提取标题和正文关键词，构建带权TF向量
     news_keywords = {}
+    all_words = set()
+    
     for news_id, title, content, language in news_list:
-        text_content = f"{title} {content[:500]}"  # 增加内容长度到500字
-        keywords = extract_keywords_simple(text_content, language)
-        news_keywords[news_id] = {'id': news_id, 'title': title, 'keywords': keywords}
+        title_kws = extract_keywords_simple(title, language)
+        content_kws = extract_keywords_simple(content[:500], language)
+        
+        tf = Counter()
+        for w in title_kws:
+            tf[w] += TITLE_WEIGHT
+        for w in content_kws:
+            tf[w] += 1
+        
+        keywords_set = set(tf.keys())
+        all_words.update(keywords_set)
+        news_keywords[news_id] = {
+            'id': news_id,
+            'title': title,
+            'keywords': keywords_set,
+            'tf': tf
+        }
     
     avg_kw = sum(len(v['keywords']) for v in news_keywords.values()) / len(news_keywords)
     print(f"[Cluster] 提取关键词完成，平均每篇 {avg_kw:.1f} 个关键词")
     
-    # 辅助函数：计算高质量共享词数量（排除长度<3的英文词和常见垃圾词）
+    # 计算全局IDF
+    N = len(news_keywords)
+    idf = {}
+    for word in all_words:
+        df = sum(1 for data in news_keywords.values() if word in data['tf'])
+        idf[word] = math.log(N / (df + 1)) + 1.0
+    
+    # 构建TF-IDF向量
+    vectors = {}
+    for news_id, data in news_keywords.items():
+        vec = {w: count * idf.get(w, 1.0) for w, count in data['tf'].items()}
+        vectors[news_id] = vec
+    
+    def _cosine_sim(vec1, vec2):
+        keys = set(vec1.keys()) | set(vec2.keys())
+        dot = sum(vec1.get(k, 0) * vec2.get(k, 0) for k in keys)
+        norm1 = sum(v ** 2 for v in vec1.values()) ** 0.5
+        norm2 = sum(v ** 2 for v in vec2.values()) ** 0.5
+        if norm1 == 0 or norm2 == 0:
+            return 0.0
+        return dot / (norm1 * norm2)
+    
+    def _cluster_center(cluster_members):
+        center = Counter()
+        for mid in cluster_members:
+            for w, v in vectors[mid].items():
+                center[w] += v
+        # L2归一化
+        norm = sum(v ** 2 for v in center.values()) ** 0.5
+        if norm > 0:
+            center = {w: v / norm for w, v in center.items()}
+        return center
+    
+    # 辅助函数：计算高质量共享词数量
     def _quality_shared(kw_set1, kw_set2):
         shared = kw_set1 & kw_set2
         count = 0
@@ -983,36 +1037,30 @@ def cluster_news_for_topics(news_list, similarity_threshold=0.15):
             count += 1
         return count
     
-    # 聚类
+    # 簇中心聚类
     clusters = []
     processed = set()
     
-    for news_id in news_keywords:
-        if news_id in processed:
+    for seed_id in news_keywords:
+        if seed_id in processed:
             continue
         
-        # 创建新簇
-        cluster = [news_id]
-        processed.add(news_id)
+        cluster = [seed_id]
+        processed.add(seed_id)
+        seed_data = news_keywords[seed_id]
         
-        # 查找相似新闻（与簇内任一成员相似即可加入）
         for other_id in news_keywords:
             if other_id in processed:
                 continue
-            other_data = news_keywords[other_id]
             
-            # 计算与簇内所有成员的相似度，取最大值
-            max_sim = 0
-            for member_id in cluster:
-                member_data = news_keywords[member_id]
-                sim = jaccard_similarity(member_data['keywords'], other_data['keywords'])
-                max_sim = max(max_sim, sim)
+            # 计算与当前簇中心的余弦相似度
+            center = _cluster_center(cluster)
+            sim = _cosine_sim(center, vectors[other_id])
             
-            # 高质量共享关键词数量
-            shared_quality = _quality_shared(news_keywords[news_id]['keywords'], other_data['keywords'])
+            # 兜底：与种子直接共享高质量词>=2
+            shared_quality = _quality_shared(seed_data['keywords'], news_keywords[other_id]['keywords'])
             
-            # 满足任一条件即加入（阈值提高，共享词要求>=3）
-            if max_sim >= similarity_threshold or shared_quality >= 3:
+            if sim >= similarity_threshold or shared_quality >= 2:
                 cluster.append(other_id)
                 processed.add(other_id)
         
@@ -1023,20 +1071,18 @@ def cluster_news_for_topics(news_list, similarity_threshold=0.15):
     for i, c in enumerate(clusters[:5]):
         print(f"[Cluster]  簇{i+1}: {len(c)} 篇新闻")
     
-    # 生成话题信息
+    # 生成话题信息（逻辑与旧版保持一致）
     topics = []
     for cluster in clusters:
-        # 统计关键词频率
-        keyword_freq = defaultdict(int)
+        # 统计关键词频率（用原始tf累加，更能反映话题核心）
+        keyword_freq = Counter()
         for news_id in cluster:
-            for kw in news_keywords[news_id]['keywords']:
-                keyword_freq[kw] += 1
+            for w, cnt in news_keywords[news_id]['tf'].items():
+                keyword_freq[w] += cnt
         
-        # 取Top10关键词后再过滤
-        top_keywords = sorted(keyword_freq.items(), key=lambda x: x[1], reverse=True)[:10]
-        topic_keywords = [kw for kw, freq in top_keywords]
+        top_keywords = [kw for kw, _ in keyword_freq.most_common(10)]
+        topic_keywords = top_keywords
         
-        # 过滤出高质量关键词用于生成话题名
         def _is_good_kw(kw):
             if kw in JUNK_WORDS or kw in ZH_JUNK_WORDS or _is_zh_junk(kw):
                 return False
@@ -1046,30 +1092,23 @@ def cluster_news_for_topics(news_list, similarity_threshold=0.15):
         
         good_keywords = [kw for kw in topic_keywords if _is_good_kw(kw)]
         
-        # 生成话题名（优先使用代表新闻的标题核心词）
+        # 生成话题名
         rep_title = news_keywords[cluster[0]]['title']
         topic_name = None
         
         if rep_title:
-            # 提取标题中的核心部分（去除来源等后缀）
             title_clean = rep_title
-            # 去除常见的来源前缀/后缀（如"新华社：xxx"、"xxx_凤凰网"）
-            title_clean = re.sub(r'^[\u4e00-\u9fa5]{2,5}[：:|]', '', title_clean)  # 来源前缀
-            title_clean = re.sub(r'[_|｜][\u4e00-\u9fa5a-zA-Z]+$', '', title_clean)  # 来源后缀
-            # 去除末尾的日期/说/称/回应等垃圾后缀
+            title_clean = re.sub(r'^[\u4e00-\u9fa5]{2,5}[：:|]', '', title_clean)
+            title_clean = re.sub(r'[_|｜][\u4e00-\u9fa5a-zA-Z]+$', '', title_clean)
             title_clean = re.sub(r'(\d+日说|\d+日称|\d+日表示|\d+日回应|当地时间\d+日|暂无回应)$', '', title_clean)
             title_clean = title_clean.strip()
             
-            # 额外过滤：标题不能是已知的UI垃圾词组合
             if title_clean and len(title_clean) >= 6 and not re.search(r'(share|saveclick|homepage|posts|secondsplay|video)', title_clean, re.IGNORECASE):
                 topic_name = title_clean[:18] + "..." if len(title_clean) > 18 else title_clean
         
-        # 策略2：使用高质量关键词组合
         if not topic_name and good_keywords:
-            # 进一步过滤：避免使用单个通用英文词或人名
             filtered_keywords = []
             for kw in good_keywords[:5]:
-                # 过滤：纯小写英文且长度>8的可能是人名/无意义词
                 if re.match(r'^[a-z]+$', kw) and len(kw) > 8:
                     continue
                 filtered_keywords.append(kw)
@@ -1079,19 +1118,15 @@ def cluster_news_for_topics(news_list, similarity_threshold=0.15):
             elif filtered_keywords:
                 topic_name = filtered_keywords[0]
         
-        # 话题质量检查：如果无法生成有效话题名，丢弃该簇
         if not topic_name:
             print(f"[Topics] 丢弃簇（无法生成话题名）：{news_keywords[cluster[0]]['title'][:30]}...")
             continue
-        # 如果话题名只包含数字、标点或长度<3，丢弃
         if len(re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9]', '', topic_name)) < 3:
             print(f"[Topics] 丢弃簇（话题名过短）：'{topic_name}'")
             continue
-        # 如果话题名匹配明显的UI垃圾模式，丢弃
         if re.search(r'(share|saveclick|homepage|posts|secondsplay|seconds|play)', topic_name, re.IGNORECASE):
             print(f"[Topics] 丢弃簇（包含UI垃圾词）：'{topic_name}'")
             continue
-        # 如果高质量关键词过少（且簇只有1条新闻），可能是噪声
         if len(good_keywords) < 2 and len(cluster) < 2:
             print(f"[Topics] 丢弃低质量簇（仅{len(cluster)}条新闻，高质量词{len(good_keywords)}个）：'{topic_name}'")
             continue
