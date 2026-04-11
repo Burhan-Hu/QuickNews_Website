@@ -30,8 +30,48 @@ JUNK_WORDS = {
     'today', 'yesterday', 'tomorrow', 'day', 'week', 'month', 'year',
     # 常见无意义组合
     'artemis', 'earth', 'minister', 'talks', 'said', 'says', 'report', 'reports', 'according',
-    'ap', 'reuters', 'afp', 'bbc', 'cnn', 'fox', 'news', 'breaking', 'update', 'live'
+    'ap', 'reuters', 'afp', 'bbc', 'cnn', 'fox', 'news', 'breaking', 'update', 'live',
+    # 新增：更多UI残留和通用无意义词
+    'play', 'save', 'copy', 'paste', 'print', 'email', 'twitter', 'facebook', 'weibo', 'wechat',
+    'whatsapp', 'telegram', 'linkedin', 'reddit', 'pinterest', 'tumblr', 'vk', 'ok', 'qq',
+    'related', 'recommended', 'popular', 'trending', 'latest', 'featured', 'editor', 'pick',
+    'gallery', 'slideshow', 'podcast', 'newsletter', 'alert', 'notification', 'popup', 'modal',
+    'cookie', 'privacy', 'policy', 'terms', 'conditions', 'agreement', 'consent', 'gdpr',
+    'skip', 'next', 'prev', 'previous', 'back', 'forward', 'continue', 'read', 'full', 'story',
+    'expand', 'collapse', 'show', 'hide', 'toggle', 'menu', 'close', 'open', 'start', 'stop',
+    'source', 'sources', 'author', 'authors', 'editor', 'editors', 'writer', 'writers',
+    'published', 'updated', 'modified', 'created', 'posted', 'minutes', 'hours', 'ago',
+    'widget', 'module', 'component', 'block', 'section', 'container', 'wrapper', 'holder',
 }
+
+# 中文垃圾短语过滤（正则模式）
+ZH_JUNK_PATTERNS = [
+    r'^\d+日?说$', r'^\d+日?称$', r'^\d+日?表示$', r'^\d+日?回应$',
+    r'当地时间\d+', r'北京时间\d+', r'\d+月\d+日', r'\d+年\d+月',
+    r'对此暂无回应', r'暂无回应', r'乌方对此', r'俄方对此', r'美方对此', r'中方对此',
+    r'.*?新华社.*?', r'.*?央视.*?新闻.*?', r'.*?新闻网.*?',
+    r'^[一二三四五六七八九十百千万亿]+$',  # 纯数字汉字
+]
+ZH_JUNK_PATTERN = re.compile('|'.join(ZH_JUNK_PATTERNS))
+
+# 中文特定垃圾词（整词匹配）
+ZH_JUNK_WORDS = {
+    '新华社', '新华网', '央视新闻', '央视网', '人民日报', '环球时报', '界面新闻',
+    '当地时间', '北京时间', '日说', '日称', '日表示', '日回应', '暂无', '对此',
+    '报道称', '据报道', '消息称', '消息称', '知情人士', '消息人士',
+}
+
+def _is_zh_junk(word):
+    """判断中文词是否为垃圾词"""
+    if word in ZH_JUNK_WORDS:
+        return True
+    if ZH_JUNK_PATTERN.search(word):
+        return True
+    # 过滤纯数字或数字占比过高的词
+    if sum(1 for c in word if c.isdigit()) / len(word) > 0.5:
+        return True
+    return False
+
 
 try:
     import jieba
@@ -836,6 +876,7 @@ def extract_keywords_simple(text_content, language='zh'):
     - 过滤HTML标签和脚本
     - 过滤UI元素和常见垃圾词汇
     - 过滤停用词
+    - 中文使用jieba分词（如可用），否则使用bigram fallback
     """
     if not text_content:
         return set()
@@ -845,25 +886,42 @@ def extract_keywords_simple(text_content, language='zh'):
     text_content = re.sub(r'<style[^>]*>.*?</style>', ' ', text_content, flags=re.DOTALL | re.IGNORECASE)
     text_content = re.sub(r'<[^>]+>', ' ', text_content)  # 移除所有HTML标签
     
-    # 2. 只保留中文、英文、数字
-    text_content = re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9\s]', ' ', text_content)
+    # 2. 预清洗：移除常见UI残留组合（大小写不敏感）
+    ui_patterns = [
+        r'share[-\s]?save[-\s]?click', r'home[-\s]?page[-\s]?posts?', r'seconds[-\s]?play[-\s]?video',
+        r'save[-\s]?click', r'share[-\s]?click', r'read[-\s]?more', r'load[-\s]?more',
+        r'sign[-\s]?up', r'sign[-\s]?in', r'log[-\s]?in', r'follow[-\s]?us',
+    ]
+    for pattern in ui_patterns:
+        text_content = re.sub(pattern, ' ', text_content, flags=re.IGNORECASE)
     
     keywords = set()
     
     if language == 'zh':
-        words = text_content.split()
+        # 中文分词：优先使用jieba
+        if _JIEBA_AVAILABLE and jieba:
+            words = jieba.lcut(text_content)
+        else:
+            # Fallback：按空格分割（兼容旧逻辑）
+            words = text_content.split()
+        
         for word in words:
             word = word.strip().lower()
-            # 过滤条件
-            if not (2 <= len(word) <= 12):  # 长度限制
+            if not word:
                 continue
-            if word.isdigit():  # 纯数字
+            # 只保留中文和英文数字
+            if not re.match(r'^[\u4e00-\u9fa5a-zA-Z0-9]+$', word):
                 continue
-            if word in STOP_WORDS:  # 停用词
+            # 长度限制
+            if not (2 <= len(word) <= 12):
                 continue
-            if word in JUNK_WORDS:  # 垃圾词汇
+            if word.isdigit():
                 continue
-            if re.match(r'^\d+年$|^\d+月$|^\d+日$', word):  # 日期格式
+            if word in STOP_WORDS:
+                continue
+            if word in JUNK_WORDS:
+                continue
+            if _is_zh_junk(word):
                 continue
             keywords.add(word)
     else:
@@ -891,11 +949,12 @@ def jaccard_similarity(set1, set2):
     union = len(set1 | set2)
     return intersection / union if union > 0 else 0.0
 
-def cluster_news_for_topics(news_list, similarity_threshold=0.08):
+def cluster_news_for_topics(news_list, similarity_threshold=0.15):
     """
     基于Jaccard相似度对新闻进行聚类（优化版）
-    - 降低阈值让更多相关新闻聚到一起
-    - 使用关键词数量作为辅助判断
+    - 提高阈值过滤噪声
+    - 使用高质量共享关键词作为辅助判断
+    - 增强话题名生成与质量过滤
     返回话题列表
     """
     if not news_list or len(news_list) < 2:
@@ -908,7 +967,19 @@ def cluster_news_for_topics(news_list, similarity_threshold=0.08):
         keywords = extract_keywords_simple(text_content, language)
         news_keywords[news_id] = {'id': news_id, 'title': title, 'keywords': keywords}
     
-    # 聚类：使用更宽松的策略
+    # 辅助函数：计算高质量共享词数量（排除长度<3的英文词和常见垃圾词）
+    def _quality_shared(kw_set1, kw_set2):
+        shared = kw_set1 & kw_set2
+        count = 0
+        for w in shared:
+            if w in JUNK_WORDS or w in ZH_JUNK_WORDS or _is_zh_junk(w):
+                continue
+            if re.match(r'^[a-z]+$', w) and len(w) < 4:
+                continue
+            count += 1
+        return count
+    
+    # 聚类
     clusters = []
     processed = set()
     
@@ -919,7 +990,6 @@ def cluster_news_for_topics(news_list, similarity_threshold=0.08):
         # 创建新簇
         cluster = [news_id]
         processed.add(news_id)
-        news_data = news_keywords[news_id]
         
         # 查找相似新闻（与簇内任一成员相似即可加入）
         for other_id in news_keywords:
@@ -934,12 +1004,11 @@ def cluster_news_for_topics(news_list, similarity_threshold=0.08):
                 sim = jaccard_similarity(member_data['keywords'], other_data['keywords'])
                 max_sim = max(max_sim, sim)
             
-            # 或使用共享关键词数量判断（至少2个共享词）
-            shared_keywords = news_data['keywords'] & other_data['keywords']
-            shared_count = len(shared_keywords)
+            # 高质量共享关键词数量
+            shared_quality = _quality_shared(news_keywords[news_id]['keywords'], other_data['keywords'])
             
-            # 满足任一条件即加入
-            if max_sim >= similarity_threshold or shared_count >= 2:
+            # 满足任一条件即加入（阈值提高，共享词要求>=3）
+            if max_sim >= similarity_threshold or shared_quality >= 3:
                 cluster.append(other_id)
                 processed.add(other_id)
         
@@ -955,34 +1024,45 @@ def cluster_news_for_topics(news_list, similarity_threshold=0.08):
             for kw in news_keywords[news_id]['keywords']:
                 keyword_freq[kw] += 1
         
-        # 取Top5关键词
-        top_keywords = sorted(keyword_freq.items(), key=lambda x: x[1], reverse=True)[:5]
-        topic_keywords = [kw for kw, _ in top_keywords]
+        # 取Top10关键词后再过滤
+        top_keywords = sorted(keyword_freq.items(), key=lambda x: x[1], reverse=True)[:10]
+        topic_keywords = [kw for kw, freq in top_keywords]
+        
+        # 过滤出高质量关键词用于生成话题名
+        def _is_good_kw(kw):
+            if kw in JUNK_WORDS or kw in ZH_JUNK_WORDS or _is_zh_junk(kw):
+                return False
+            if re.match(r'^[a-z]+$', kw) and len(kw) < 4:
+                return False
+            return True
+        
+        good_keywords = [kw for kw in topic_keywords if _is_good_kw(kw)]
         
         # 生成话题名（优先使用代表新闻的标题核心词）
         rep_title = news_keywords[cluster[0]]['title']
-        
-        # 策略1：如果标题中有高权重关键词，提取标题核心作为话题名
         topic_name = None
+        
         if rep_title:
             # 提取标题中的核心部分（去除来源等后缀）
             title_clean = rep_title
             # 去除常见的来源前缀/后缀（如"新华社：xxx"、"xxx_凤凰网"）
             title_clean = re.sub(r'^[\u4e00-\u9fa5]{2,5}[：:|]', '', title_clean)  # 来源前缀
             title_clean = re.sub(r'[_|｜][\u4e00-\u9fa5a-zA-Z]+$', '', title_clean)  # 来源后缀
+            # 去除末尾的日期/说/称/回应等垃圾后缀
+            title_clean = re.sub(r'(\d+日说|\d+日称|\d+日表示|\d+日回应|当地时间\d+日|暂无回应)$', '', title_clean)
             title_clean = title_clean.strip()
             
-            if len(title_clean) >= 8:
-                # 取标题前15字作为话题名
-                topic_name = title_clean[:15] + "..." if len(title_clean) > 15 else title_clean
+            # 额外过滤：标题不能是已知的UI垃圾词组合
+            if title_clean and len(title_clean) >= 6 and not re.search(r'(share|saveclick|homepage|posts|secondsplay|video)', title_clean, re.IGNORECASE):
+                topic_name = title_clean[:18] + "..." if len(title_clean) > 18 else title_clean
         
-        # 策略2：如果策略1失败，使用关键词组合（但要求关键词质量）
-        if not topic_name and topic_keywords:
-            # 过滤掉可能是人名的关键词（避免"eric-swalwell"这种）
+        # 策略2：使用高质量关键词组合
+        if not topic_name and good_keywords:
+            # 进一步过滤：避免使用单个通用英文词或人名
             filtered_keywords = []
-            for kw in topic_keywords[:3]:
-                # 过滤：纯小写且较长的词可能是人名/无意义词
-                if len(kw) > 10 and kw.islower():
+            for kw in good_keywords[:5]:
+                # 过滤：纯小写英文且长度>8的可能是人名/无意义词
+                if re.match(r'^[a-z]+$', kw) and len(kw) > 8:
                     continue
                 filtered_keywords.append(kw)
             
@@ -991,9 +1071,18 @@ def cluster_news_for_topics(news_list, similarity_threshold=0.08):
             elif filtered_keywords:
                 topic_name = filtered_keywords[0]
         
-        # 策略3：兜底，使用原标题
+        # 话题质量检查：如果无法生成有效话题名，丢弃该簇
         if not topic_name:
-            topic_name = rep_title[:20] + "..." if len(rep_title) > 20 else rep_title
+            continue
+        # 如果话题名只包含数字、标点或长度<3，丢弃
+        if len(re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9]', '', topic_name)) < 3:
+            continue
+        # 如果话题名匹配明显的UI垃圾模式，丢弃
+        if re.search(r'(share|saveclick|homepage|posts|secondsplay|seconds|play)', topic_name, re.IGNORECASE):
+            continue
+        # 如果高质量关键词过少（且簇小），可能是噪声
+        if len(good_keywords) < 2 and len(cluster) < 3:
+            continue
         
         topics.append({
             'name': topic_name,
