@@ -706,7 +706,7 @@ def get_hot_topics():
     【说明】话题数据由爬虫任务自动维护：
     - 每次爬取结束后立即重新聚类
     - 数据始终与最新新闻同步
-    - 无需额外的过期检查或定时刷新
+    - 无聚类数据时返回空列表（而非降级显示）
     """
     try:
         with engine.connect() as conn:
@@ -727,20 +727,9 @@ def get_hot_topics():
                     'count': row[2]
                 })
             
-            # 如果无数据（首次启动或特殊情况），降级为分类统计
+            # 如果无数据，返回空列表（前端显示"暂无热点话题"）
             if not topics:
-                print("[Topics] 无聚类数据，降级为分类统计")
-                result = conn.execute(text("""
-                    SELECT c.category_name, COUNT(*) as count
-                    FROM news n
-                    JOIN news_categories nc ON n.news_id = nc.news_id
-                    JOIN categories c ON nc.category_id = c.category_id
-                    WHERE n.created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR)
-                    GROUP BY c.category_id
-                    ORDER BY count DESC
-                    LIMIT 10
-                """))
-                topics = [{'id': None, 'name': row[0], 'count': row[1]} for row in result.fetchall()]
+                print("[Topics] 无聚类数据，返回空列表")
             
             return jsonify(topics)
     except Exception as e:
@@ -1215,21 +1204,18 @@ def get_news_detail(news_id):
                 "country_name": row[8]
             }
             
-            # 获取图片
+            # 获取图片（精简版，不返回已删除的字段）
             images_result = conn.execute(text("""
-                SELECT media_url, is_cover, width, height
+                SELECT media_url
                 FROM media
                 WHERE news_id = :news_id AND media_type = 'image'
-                ORDER BY is_cover DESC, media_id ASC
+                ORDER BY media_id ASC
             """), {'news_id': news_id})
             
             images = []
             for img_row in images_result.fetchall():
                 images.append({
-                    "url": img_row[0],
-                    "is_cover": bool(img_row[1]),
-                    "width": img_row[2],
-                    "height": img_row[3]
+                    "url": img_row[0]
                 })
             news_data["images"] = images
             
