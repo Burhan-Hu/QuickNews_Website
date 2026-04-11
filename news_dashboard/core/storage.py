@@ -119,13 +119,12 @@ class NewsStorage:
                 if url:
                     conn.execute(
                         text("""
-                            INSERT INTO media (news_id, media_type, media_url, is_cover, created_at)
-                            VALUES (:news_id, 'image', :url, :is_cover, NOW())
+                            INSERT INTO media (news_id, media_type, media_url, created_at)
+                            VALUES (:news_id, 'image', :url, NOW())
                         """),
                         {
                             'news_id': news_id,
-                            'url': url[:800],
-                            'is_cover': (idx == 0)
+                            'url': url[:800]
                         }
                     )
             
@@ -141,8 +140,8 @@ class NewsStorage:
                 if url:
                     conn.execute(
                         text("""
-                            INSERT INTO media (news_id, media_type, media_url, is_cover, created_at)
-                            VALUES (:news_id, 'video', :url, FALSE, NOW())
+                            INSERT INTO media (news_id, media_type, media_url, created_at)
+                            VALUES (:news_id, 'video', :url, NOW())
                         """),
                         {'news_id': news_id, 'url': url[:800]}
                     )

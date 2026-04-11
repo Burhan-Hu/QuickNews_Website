@@ -69,7 +69,7 @@ class HTMLNewsFetcher:
             return curl_requests.Session(impersonate="chrome120")
         return None
     
-    def _get_anti_crawl_soup(self, url, timeout=15):
+    def _get_anti_crawl_soup(self, url, timeout=(10, 20)):
         """
         使用 curl_cffi 获取页面（模拟真实浏览器 TLS 指纹）
         解决 ClawCloud 等容器平台 IP 被识别为云服务的问题
@@ -95,7 +95,7 @@ class HTMLNewsFetcher:
             print(f"    [AntiCrawl] Request failed: {type(e).__name__}")
             return None
     
-    def _get_soup(self, url, timeout=15, use_curl=False, curl_session=None, headers=None):
+    def _get_soup(self, url, timeout=(10, 20), use_curl=False, curl_session=None, headers=None):
         """
         通用请求封装：支持普通 requests 和 curl_cffi
         返回 (soup, response_text) 或抛出异常
@@ -125,7 +125,7 @@ class HTMLNewsFetcher:
 
         try:
             print(f"[HTML] 抓取: 新华网-时政 ({list_url})")
-            response = self.session.get(list_url, timeout=15)
+            response = self.session.get(list_url, timeout=(10, 20))
             response.encoding = 'utf-8'
             soup = BeautifulSoup(response.text, 'lxml')
 
@@ -205,7 +205,7 @@ class HTMLNewsFetcher:
         from urllib.parse import urljoin
         try:
             print(f"    [Debug] 正在请求: {url}")
-            response = self.session.get(url, timeout=10)
+            response = self.session.get(url, timeout=(8, 15))
             response.encoding = 'utf-8'
             
             # 保存HTML内容供后续使用
@@ -350,7 +350,7 @@ class HTMLNewsFetcher:
         通用详情页抓取（用于非新华网站点）
         """
         try:
-            response = self.session.get(url, timeout=10)
+            response = self.session.get(url, timeout=(8, 15))
             response.encoding = 'utf-8'
             soup = BeautifulSoup(response.text, 'lxml')
 
@@ -729,7 +729,7 @@ class HTMLNewsFetcher:
         """
         try:
             # 使用增强 Headers 获取页面
-            soup = self._get_anti_crawl_soup(url, timeout=10)
+            soup = self._get_anti_crawl_soup(url, timeout=(8, 15))
             if not soup:
                 return '', datetime.now(), [], []
         
@@ -901,7 +901,7 @@ class HTMLNewsFetcher:
             articles = []
             
             # 获取列表页
-            response = self.session.get(url, timeout=15)
+            response = self.session.get(url, timeout=(10, 20))
             response.encoding = 'utf-8'
             soup = BeautifulSoup(response.text, 'lxml')
             
@@ -965,7 +965,7 @@ class HTMLNewsFetcher:
         """
         抓取界面新闻详情页
         """
-        resp = self.session.get(url, timeout=10)
+        resp = self.session.get(url, timeout=(8, 15))
         resp.encoding = 'utf-8'
         soup = BeautifulSoup(resp.text, 'lxml')
         
@@ -1066,7 +1066,7 @@ class HTMLNewsFetcher:
                 print(f"[HTML] 抓取: Al Jazeera-{category}")
                 
                 try:
-                    response = self.session.get(url, timeout=15)
+                    response = self.session.get(url, timeout=(10, 20))
                     response.encoding = 'utf-8'
                     soup = BeautifulSoup(response.text, 'html.parser')
                     
@@ -1161,7 +1161,7 @@ class HTMLNewsFetcher:
                 print(f"[HTML] 抓取: 环球时报-{channel}")
                 
                 try:
-                    response = self.session.get(url, timeout=15)
+                    response = self.session.get(url, timeout=(10, 20))
                     response.encoding = 'utf-8'
                     soup = BeautifulSoup(response.text, 'html.parser')
                     
@@ -1234,7 +1234,7 @@ class HTMLNewsFetcher:
     def _fetch_globaltimes_article(self, url):
         """获取环球时报文章详情页 - 修复图片抓取"""
         try:
-            response = self.session.get(url, timeout=15)
+            response = self.session.get(url, timeout=(10, 20))
             response.encoding = 'utf-8'
             soup = BeautifulSoup(response.text, 'html.parser')
             
@@ -1368,7 +1368,7 @@ class HTMLNewsFetcher:
         
         try:
             # 使用增强 Headers 获取页面
-            soup = self._get_anti_crawl_soup(url, timeout=15)
+            soup = self._get_anti_crawl_soup(url, timeout=(10, 20))
             if not soup:
                 print(f"[HTML] [FAIL] ScienceDaily: 无法获取页面")
                 return []
@@ -1410,7 +1410,7 @@ class HTMLNewsFetcher:
                     print(f"  [ScienceDaily] 获取: {title[:50]}...")
                     
                     # 抓取详情页（使用增强 Headers）
-                    article_soup = self._get_anti_crawl_soup(link, timeout=10)
+                    article_soup = self._get_anti_crawl_soup(link, timeout=(8, 15))
                     if not article_soup:
                         print(f"    [ScienceDaily] 详情页获取失败")
                         continue
@@ -1568,7 +1568,7 @@ class HTMLNewsFetcher:
             try:
                 print(f"[HTML] 抓取: 俄罗斯卫星通讯社 - {url.split('/')[-2]}")
                 
-                response = session.get(url, timeout=15)
+                response = session.get(url, timeout=(10, 20))
                 response.raise_for_status()
                 response.encoding = 'utf-8'
                 
@@ -1601,7 +1601,7 @@ class HTMLNewsFetcher:
                         print(f"  [Sputnik] 获取: {title[:50]}...")
                         
                         # 内嵌详情页抓取逻辑（避免调用_fetch_article_content以确保结构正确）
-                        article_resp = session.get(href, timeout=10)
+                        article_resp = session.get(href, timeout=(8, 15))
                         article_resp.encoding = 'utf-8'
                         article_soup = BeautifulSoup(article_resp.text, 'lxml')
                         
@@ -1815,7 +1815,7 @@ class HTMLNewsFetcher:
             try:
                 print(f"[HTML] 抓取: 纽约时报-中文 - {url.split('/')[-2]}")
                 
-                response = self.session.get(url, timeout=15, headers={
+                response = self.session.get(url, timeout=(10, 20), headers={
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
                 })
                 response.raise_for_status()
@@ -1851,7 +1851,7 @@ class HTMLNewsFetcher:
                     try:
                         print(f"  [NYTimes-CN] 获取: {title[:50]}...")
                         
-                        article_resp = self.session.get(href, timeout=10, headers={
+                        article_resp = self.session.get(href, timeout=(8, 15), headers={
                             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
                         })
                         article_resp.encoding = 'utf-8'
@@ -2022,7 +2022,7 @@ class HTMLNewsFetcher:
                 category = url.split('/')[-1] if url != 'https://www.bbc.com/news' else 'news'
                 print(f"[HTML] 抓取: BBC-{category}")
                 
-                response = self.session.get(url, timeout=15, headers={
+                response = self.session.get(url, timeout=(10, 20), headers={
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
                 })
                 response.raise_for_status()
@@ -2054,7 +2054,7 @@ class HTMLNewsFetcher:
                     try:
                         print(f"  [BBC] 获取: {title[:50]}...")
                         
-                        article_resp = self.session.get(href, timeout=10, headers={
+                        article_resp = self.session.get(href, timeout=(8, 15), headers={
                             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
                         })
                         article_resp.encoding = 'utf-8'

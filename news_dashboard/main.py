@@ -19,7 +19,7 @@ def main():
     print("=" * 60)
     
     # 测试数据库连接
-    print("\n[Check] 测试Alwaysdata数据库连接...")
+    print("\n[Check] 测试数据库连接...")
     if not test_connection():
         print("[Error] 数据库连接失败，请检查：")
         print("  1. config/db_config.py 中的host/user/password")

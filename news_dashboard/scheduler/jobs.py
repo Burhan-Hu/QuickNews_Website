@@ -8,9 +8,6 @@ from core.processor import ContentProcessor
 from core.storage import NewsStorage
 from config.sources import NEWSAPI_CONFIG
 
-import time
-import sys
-
 class NewsScheduler:
     def __init__(self):
         self.scheduler = BackgroundScheduler()
@@ -26,9 +23,6 @@ class NewsScheduler:
             'failed': 0,              # 保存失败数
             'indexed': 0              # XML索引数
         }
-        
-        # 记录启动时间，用于24小时自动重启
-        self.start_time = time.time()
     
     def _process_and_save(self, articles, source_name):
         """处理并保存文章（流式处理，防止内存累积）"""
@@ -127,15 +121,22 @@ class NewsScheduler:
         
         print(f"[Job] 总计: 抓取{total_fetched}条, 保存{total_saved}条, 跳过{total_failed}条")
         
+        # 【新增】爬取结束后立即更新热点话题（基于最新新闻聚类）
+        if total_saved > 0:
+            print("[Job] 开始更新热点话题...")
+            try:
+                # 导入并执行聚类（使用相对导入）
+                import sys
+                sys.path.insert(0, 'D:/qknews/news_dashboard')
+                from ir.xml_api import update_hot_topics_internal
+                topic_count = update_hot_topics_internal()
+                print(f"[Job] 热点话题更新完成，共{topic_count}个话题")
+            except Exception as e:
+                print(f"[Job] 热点话题更新失败: {e}")
+        
         # 强制垃圾回收，缓解内存泄漏
         import gc
         gc.collect()
-        
-        # 检查是否运行超过24小时（48轮），如果是则自动重启
-        elapsed_hours = (time.time() - self.start_time) / 3600
-        if elapsed_hours >= 24:
-            print(f"[Restart] 运行时间达到 {elapsed_hours:.1f} 小时，执行24小时自动重启")
-            sys.exit(0)  # 退出进程，ClawCloud会自动重启容器
     
     def job_rebuild_missing_index(self):
         """补充构建漏掉的索引"""
@@ -177,7 +178,7 @@ class NewsScheduler:
             print(f"[IndexBuilder] 检查失败: {e}")
     
     def start(self):
-        # 主任务：每30分钟抓取并索引
+        # 主任务：每30分钟抓取并索引（包含热点话题聚类）
         self.scheduler.add_job(
             self.job_fetch_and_save,
             IntervalTrigger(minutes=30),
@@ -193,16 +194,15 @@ class NewsScheduler:
             replace_existing=True
         )
         
-        # 清理任务：每小时执行一次
-        self.scheduler.add_job(
-            self.storage.cleanup_old_news,
-            IntervalTrigger(hours=1),
-            id='cleanup_job',
-            replace_existing=True
-        )
+        # 【注】热点话题聚类已合并到fetch_job中，爬取结束后立即执行
+        # 无需单独定时任务，确保数据一致性
+        
+        # 【移除】Python cleanup job，改为完全依赖MySQL Event Scheduler
+        # MySQL: CREATE EVENT evt_cleanup_news ON SCHEDULE EVERY 30 MINUTE DO CALL sp_cleanup_48h();
+        # 避免双重cleanup导致的锁竞争
         
         self.scheduler.start()
-        print("[Scheduler] 启动成功（XML检索增强版）")
+        print("[Scheduler] 启动成功（抓取+聚类一体化版）")
     
     def stop(self):
         self.scheduler.shutdown()

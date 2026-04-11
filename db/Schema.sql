@@ -1,6 +1,4 @@
--- utf8mb4（支持中文及Emoji）
-
--- 创建数据库（如果残存测试表，删除测试表）
+-- 创建数据库（如果残存测试表，删除测试表
 USE quicknews_maindb;
 DROP TABLE IF EXISTS test_table;
 
@@ -20,8 +18,8 @@ CREATE TABLE IF NOT EXISTS countries (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 COMMENT='国家地理信息表';
 
--- A2. sources 消息来源表
--- 用途：管理RSS/爬取源，追踪新闻出处
+-- A2. sources 消息来源表（合并source_stats统计字段）
+-- 用途：管理RSS/爬取源，追踪新闻出处，实时统计新闻数量
 CREATE TABLE IF NOT EXISTS sources (
     source_id INT AUTO_INCREMENT COMMENT '来源ID',
     source_name VARCHAR(100) NOT NULL COMMENT '来源名称（如BBC中文）',
@@ -29,12 +27,16 @@ CREATE TABLE IF NOT EXISTS sources (
     source_type ENUM('rss','api','crawler') DEFAULT 'rss' COMMENT '采集方式',
     language CHAR(2) DEFAULT 'zh' COMMENT '语言代码（zh/en）',
     reliability_score TINYINT COMMENT '可信度评分1-10',
+    -- 【新增】统计字段（原source_stats表合并至此）
+    total_news BIGINT NOT NULL DEFAULT 0 COMMENT '累计新闻数',
+    today_news INT NOT NULL DEFAULT 0 COMMENT '当日新闻数',
+    last_news_time DATETIME COMMENT '最后入库时间',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (source_id),
     UNIQUE KEY uk_source_url (source_url),
     CONSTRAINT chk_reliability CHECK (reliability_score BETWEEN 1 AND 10)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-COMMENT='新闻来源管理';
+COMMENT='新闻来源管理（含实时统计）';
 
 -- A3. categories 固定板块表
 -- 用途：科技、政治、经济等预设分类
@@ -148,28 +150,23 @@ COMMENT='新闻与板块的多对多关联';
 
 -- D：媒体与检索系统表
 
--- D1. media 媒体资源表（图片/视频）
+-- D1. media 媒体资源表（精简版）
 -- 视频策略：外网存embed链接，内网存/static/路径
 CREATE TABLE IF NOT EXISTS media (
     media_id BIGINT AUTO_INCREMENT,
     news_id BIGINT NOT NULL COMMENT '所属新闻',
     media_type ENUM('image','video') NOT NULL COMMENT '媒体类型',
     media_url VARCHAR(1000) NOT NULL COMMENT 'URL或本地路径',
-    is_cover BOOLEAN DEFAULT FALSE COMMENT '是否为封面图',
-    width INT COMMENT '宽度px（前端布局用）',
-    height INT COMMENT '高度px',
-    file_size_kb INT COMMENT '文件大小KB',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
     PRIMARY KEY (media_id),
     INDEX idx_news_media (news_id, media_type),
-    INDEX idx_cover (is_cover),
 
     -- 外键（云数据库不支持可删除）
     CONSTRAINT fk_media_news FOREIGN KEY (news_id)
         REFERENCES news(news_id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-COMMENT='新闻图片与视频资源';
+COMMENT='新闻图片与视频资源（精简版）';
 
 -- D2. inverted_index 倒排索引表（IR系统核心）
 -- 手动实现全文检索，支持TF-IDF排序
@@ -195,41 +192,45 @@ CREATE TABLE IF NOT EXISTS inverted_index (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 COMMENT='【XML检索核心】倒排索引表，支持中英文双语、XPath路径限定';
 
--- D3. source_stats 来源统计表（trg_news_after_insert 依赖）
-CREATE TABLE IF NOT EXISTS source_stats (
-    source_id INT NOT NULL COMMENT '来源ID',
-    total_news BIGINT NOT NULL DEFAULT 0 COMMENT '累计新闻数',
-    today_news INT NOT NULL DEFAULT 0 COMMENT '当日新闻数',
-    last_publish_time DATETIME NOT NULL COMMENT '最后入库时间',
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    PRIMARY KEY (source_id),
-    CONSTRAINT fk_stat_source FOREIGN KEY (source_id)
-        REFERENCES sources(source_id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-COMMENT='来源级别抓取统计（与trg_news_after_insert一致）';
-
--- 【新增表2：api_request_logs】记录爬虫请求，支撑"系统监控"和凑数
-CREATE TABLE IF NOT EXISTS api_request_logs (
-    log_id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    source_id INT COMMENT '来源ID（NULL表示直接API调用）',
-    request_type VARCHAR(20) NOT NULL COMMENT 'newsapi/rss/html',
-    request_url VARCHAR(500),
-    http_status INT,
-    fetched_count INT DEFAULT 0,
-    error_message VARCHAR(500),
+-- D3. hot_topics 热点话题表（文本聚类结果持久化）
+-- 用途：自动发现48小时内的热点事件，将相似新闻聚合成话题
+CREATE TABLE IF NOT EXISTS hot_topics (
+    topic_id INT AUTO_INCREMENT,
+    topic_name VARCHAR(200) NOT NULL COMMENT '话题名称（如"特朗普关税政策"）',
+    topic_keywords VARCHAR(500) COMMENT '话题关键词（JSON数组，如["特朗普","关税","中国"]）',
+    news_count INT DEFAULT 0 COMMENT '关联新闻数',
+    sentiment_score FLOAT COMMENT '话题情绪得分（-1负面~1正面，可选）',
+    first_news_time DATETIME COMMENT '话题首条新闻时间',
+    last_news_time DATETIME COMMENT '话题最新新闻时间',
+    is_active BOOLEAN DEFAULT TRUE COMMENT '是否活跃（48小时内）',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (source_id) REFERENCES sources(source_id) ON DELETE SET NULL
-) ENGINE=InnoDB COMMENT='API请求日志表';
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (topic_id),
+    INDEX idx_active_time (is_active, last_news_time),
+    INDEX idx_count (news_count)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+COMMENT='热点话题聚合（48小时生命周期，文本聚类结果）';
 
--- 【新增表3：index_build_logs】记录存储过程执行，凑数+支撑作业演示
-CREATE TABLE IF NOT EXISTS index_build_logs (
-    log_id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    news_id BIGINT NOT NULL,
-    term_count INT DEFAULT 0 COMMENT '本次构建的词项数',
-    build_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    build_method VARCHAR(50) DEFAULT 'procedure' COMMENT 'procedure/python/manual',
-    FOREIGN KEY (news_id) REFERENCES news(news_id) ON DELETE CASCADE
-) ENGINE=InnoDB COMMENT='索引构建日志表';
+-- D4. news_topics 新闻-话题关联表
+-- 用途：记录每条新闻属于哪些话题（支持一篇多话题）
+CREATE TABLE IF NOT EXISTS news_topics (
+    id BIGINT AUTO_INCREMENT,
+    news_id BIGINT NOT NULL COMMENT '新闻ID',
+    topic_id INT NOT NULL COMMENT '话题ID',
+    similarity_score FLOAT DEFAULT 1.0 COMMENT '新闻与话题的相似度得分（0-1）',
+    is_representative BOOLEAN DEFAULT FALSE COMMENT '是否为代表性新闻（摘要展示用）',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_news_topic (news_id, topic_id),
+    INDEX idx_topic_news (topic_id, news_id),
+    INDEX idx_representative (topic_id, is_representative),
+    CONSTRAINT fk_nt_news FOREIGN KEY (news_id) REFERENCES news(news_id) ON DELETE CASCADE,
+    CONSTRAINT fk_nt_topic FOREIGN KEY (topic_id) REFERENCES hot_topics(topic_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+COMMENT='新闻与话题的多对多关联（聚类结果）';
+
+-- 【注】source_stats已合并到sources表
+-- 【注】api_request_logs和index_build_logs已移除（纯日志功能，改用文件日志）
 
 -- E：初始数据填充（基础维度数据）
 -- E1. 插入主要国家数据（Top 20，覆盖新闻高频地区）
@@ -527,42 +528,7 @@ INSERT INTO sources (source_name, source_url, source_type, language, reliability
 
 -- country_keywords 表数据填充（完整版）
 INSERT IGNORE INTO country_keywords (country_code, keyword, weight_title, weight_content) VALUES
--- 中国
-('CN', '中国', 3, 1), ('CN', '北京', 3, 1), ('CN', '上海', 3, 1), ('CN', '习近平', 3, 1), ('CN', '内蒙古', 3, 1),
-('CN', 'China', 3, 1), ('CN', 'Chinese', 3, 1), ('CN', 'Beijing', 3, 1), ('CN', 'Shanghai', 3, 1),
-('CN', 'A股', 3, 1),('CN', 'PLA', 3, 1),
--- 美国
-('US', '美国', 3, 1), ('US', '华盛顿', 3, 1), ('US', '纽约', 3, 1), ('US', 'USA', 3, 1),('US', 'US', 3, 1),
-('US', 'United States', 3, 1), ('US', 'CIA', 3, 1), ('US', '美军', 3, 1), ('US', 'White House', 3, 1),
-('US', 'Trump', 3, 1), ('US', '加州', 3, 1), ('US', 'California', 3, 1),('US', 'NASA', 3, 1),('US', 'Alabama', 3, 1),
-('US', 'Alaska', 3, 1),('US', 'Arizona', 3, 1),('US', 'Arkansas', 3, 1),('US', 'Colorado', 3, 1),('US', 'Connecticut', 3, 1),
-('US', 'Delaware', 3, 1),('US', 'Florida', 3, 1),('US', 'Georgia', 3, 1),('US', 'Hawaii', 3, 1),
-('US', 'Idaho', 3, 1),('US', 'Illinois', 3, 1),('US', 'Indiana', 3, 1),('US', 'Kansas', 3, 1),('US', 'Kentucky', 3, 1),
-('US', 'Louisiana', 3, 1),('US', 'Maine', 3, 1),('US', 'Maryland', 3, 1),('US', 'Massachusetts', 3, 1),
-('US', 'Michigan', 3, 1),('US', 'Minnesota', 3, 1),('US', 'Mississippi', 3, 1),
-('US', 'Missouri', 3, 1),('US', 'Montana', 3, 1),('US', 'Nebraska', 3, 1),('US', 'Nevada', 3, 1),('US', 'New Hampshire', 3, 1),('US', 'New Jersey', 3, 1),
-('US', 'New Mexico', 3, 1),('US', 'New York', 3, 1),('US', 'North Carolina', 3, 1),('US', 'North Dakota', 3, 1),('US', 'Ohio', 3, 1),
-('US', 'Oklahoma', 3, 1),('US', 'Oregon', 3, 1),('US', 'Pennsylvania', 3, 1),('US', 'Rhode Island', 3, 1),
-('US', 'Carolina', 3, 1),('US', 'Dakota', 3, 1),('US', 'Tennessee', 3, 1),('US', 'Texas', 3, 1),
-('US', 'Utah', 3, 1),('US', 'Vermont', 3, 1),('US', 'Virginia', 3, 1),('US', 'Washington', 3, 1),
-('US', 'West Virginia', 3, 1),('US', 'Wisconsin', 3, 1),('US', 'Wyoming', 3, 1),('US', 'Hollywood', 3, 1),
-('US', 'MIT', 3, 1),('US', 'Yale', 3, 1),('US', 'Harvard', 3, 1),
--- 日本
-('JP', '日本', 3, 1), ('JP', '东京', 3, 1), ('JP', 'Japan', 3, 1), ('JP', 'Tokyo', 3, 1),
-('JP', '天皇', 3, 1),
--- 英国
-('GB', '英国', 3, 1), ('GB', '伦敦', 3, 1), ('GB', 'UK', 3, 1), ('GB', 'United Kingdom', 3, 1),
-('GB', 'Britain', 3, 1),('GB', 'Scotland', 3, 1),
--- 俄罗斯
-('RU', '俄罗斯', 3, 1), ('RU', '莫斯科', 3, 1), ('RU', '俄军', 3, 1), ('RU', 'Russia', 3, 1),
-('RU', 'Moscow', 3, 1), ('RU', '普京', 3, 1), ('RU', 'Putin', 3, 1),
--- 印度
-('IN', '印度', 3, 1), ('IN', '新德里', 3, 1), ('IN', '孟买', 3, 1), ('IN', 'India', 3, 1),
-('IN', 'Delhi', 3, 1), ('IN', 'Mumbai', 3, 1),
--- 法国
-('FR', '法国', 3, 1), ('FR', '巴黎', 3, 1), ('FR', 'France', 3, 1), ('FR', 'Paris', 3, 1),
--- 德国
-('DE', '德国', 3, 1), ('DE', '柏林', 3, 1), ('DE', 'Germany', 3, 1),('DE', 'German', 3, 1), ('DE', 'Berlin', 3, 1),
+
 #亚洲其他
 -- 韩国
 ('KR', '韩国', 3, 1), ('KR', '首尔', 3, 1), ('KR', 'Korea', 3, 1), ('KR', 'Seoul', 3, 1),
@@ -739,7 +705,43 @@ INSERT IGNORE INTO country_keywords (country_code, keyword, weight_title, weight
 -- 中国港澳台
 ('TW', '台湾', 3, 1), ('TW', '台北', 3, 1), ('TW', '民进党', 3, 1), ('TW', 'Taiwan', 3, 1), ('TW', 'Taipei', 3, 1),
 ('HK', '香港', 3, 1), ('HK', 'Hong Kong', 3, 1), ('HK', '港股', 3, 1),
-('MO', '澳门', 3, 1), ('MO', 'Macau', 3, 1), ('MO', 'Macao', 3, 1);
+('MO', '澳门', 3, 1), ('MO', 'Macau', 3, 1), ('MO', 'Macao', 3, 1),
+-- 日本
+('JP', '日本', 3, 1), ('JP', '东京', 3, 1), ('JP', 'Japan', 3, 1), ('JP', 'Tokyo', 3, 1),
+('JP', '天皇', 3, 1),
+-- 英国
+('GB', '英国', 3, 1), ('GB', '伦敦', 3, 1), ('GB', 'UK', 3, 1), ('GB', 'United Kingdom', 3, 1),
+('GB', 'Britain', 3, 1),('GB', 'Scotland', 3, 1),
+-- 俄罗斯
+('RU', '俄罗斯', 3, 1), ('RU', '莫斯科', 3, 1), ('RU', '俄军', 3, 1), ('RU', 'Russia', 3, 1),
+('RU', 'Moscow', 3, 1), ('RU', '普京', 3, 1), ('RU', 'Putin', 3, 1),('RU', '俄外交部', 3, 1),
+-- 中国
+('CN', '中国', 3, 1), ('CN', '北京', 3, 1), ('CN', '上海', 3, 1), ('CN', '习近平', 3, 1), ('CN', '内蒙古', 3, 1),
+('CN', 'China', 3, 1), ('CN', 'Chinese', 3, 1), ('CN', 'Beijing', 3, 1), ('CN', 'Shanghai', 3, 1),
+('CN', 'A股', 3, 1),('CN', 'PLA', 3, 1),
+-- 印度
+('IN', '印度', 3, 1), ('IN', '新德里', 3, 1), ('IN', '孟买', 3, 1), ('IN', 'India', 3, 1),
+('IN', 'Delhi', 3, 1), ('IN', 'Mumbai', 3, 1),
+-- 法国
+('FR', '法国', 3, 1), ('FR', '巴黎', 3, 1), ('FR', 'France', 3, 1), ('FR', 'Paris', 3, 1),
+-- 德国
+('DE', '德国', 3, 1), ('DE', '柏林', 3, 1), ('DE', 'Germany', 3, 1),('DE', 'German', 3, 1), ('DE', 'Berlin', 3, 1),
+-- 美国
+('US', '美国', 3, 1), ('US', '华盛顿', 3, 1), ('US', '纽约', 3, 1), ('US', 'USA', 3, 1),('US', 'US', 3, 1),
+('US', 'United States', 3, 1), ('US', 'CIA', 3, 1), ('US', '美军', 3, 1), ('US', 'White House', 3, 1),
+('US', 'Trump', 3, 1), ('US', '加州', 3, 1), ('US', 'California', 3, 1),('US', 'NASA', 3, 1),('US', 'Alabama', 3, 1),
+('US', 'Alaska', 3, 1),('US', 'Arizona', 3, 1),('US', 'Arkansas', 3, 1),('US', 'Colorado', 3, 1),('US', 'Connecticut', 3, 1),
+('US', 'Delaware', 3, 1),('US', 'Florida', 3, 1),('US', 'Georgia', 3, 1),('US', 'Hawaii', 3, 1),
+('US', 'Idaho', 3, 1),('US', 'Illinois', 3, 1),('US', 'Indiana', 3, 1),('US', 'Kansas', 3, 1),('US', 'Kentucky', 3, 1),
+('US', 'Louisiana', 3, 1),('US', 'Maine', 3, 1),('US', 'Maryland', 3, 1),('US', 'Massachusetts', 3, 1),
+('US', 'Michigan', 3, 1),('US', 'Minnesota', 3, 1),('US', 'Mississippi', 3, 1),
+('US', 'Missouri', 3, 1),('US', 'Montana', 3, 1),('US', 'Nebraska', 3, 1),('US', 'Nevada', 3, 1),('US', 'New Hampshire', 3, 1),('US', 'New Jersey', 3, 1),
+('US', 'New Mexico', 3, 1),('US', 'New York', 3, 1),('US', 'North Carolina', 3, 1),('US', 'North Dakota', 3, 1),('US', 'Ohio', 3, 1),
+('US', 'Oklahoma', 3, 1),('US', 'Oregon', 3, 1),('US', 'Pennsylvania', 3, 1),('US', 'Rhode Island', 3, 1),
+('US', 'Carolina', 3, 1),('US', 'Dakota', 3, 1),('US', 'Tennessee', 3, 1),('US', 'Texas', 3, 1),
+('US', 'Utah', 3, 1),('US', 'Vermont', 3, 1),('US', 'Virginia', 3, 1),('US', 'Washington', 3, 1),
+('US', 'West Virginia', 3, 1),('US', 'Wisconsin', 3, 1),('US', 'Wyoming', 3, 1),('US', 'Hollywood', 3, 1),
+('US', 'MIT', 3, 1),('US', 'Yale', 3, 1),('US', 'Harvard', 3, 1);
 
 -- ============================================================
 -- F：视图（支撑"含有视图的查询"作业）
@@ -808,15 +810,32 @@ BEGIN
     SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci;
     -- 只有当 source_id 不为 NULL 时才更新统计
     IF NEW.source_id IS NOT NULL THEN
-        INSERT INTO source_stats (source_id, total_news, today_news, last_publish_time)
-        VALUES (NEW.source_id, 1, 1, NEW.created_at)
-        ON DUPLICATE KEY UPDATE
+        UPDATE sources SET
             total_news = total_news + 1,
             today_news = CASE
-                WHEN DATE(last_publish_time) = DATE(NEW.created_at) THEN today_news + 1
-                ELSE 1
+                WHEN last_news_time IS NULL OR DATE(last_news_time) != DATE(NEW.created_at) THEN 1
+                ELSE today_news + 1
             END,
-            last_publish_time = NEW.created_at;
+            last_news_time = NEW.created_at
+        WHERE source_id = NEW.source_id;
+    END IF;
+END //
+
+-- 【新增】删除触发器：删除新闻时同步减少统计
+CREATE TRIGGER trg_news_after_delete
+AFTER DELETE ON news
+FOR EACH ROW
+BEGIN
+    SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci;
+    -- 只有当 source_id 不为 NULL 时才更新统计
+    IF OLD.source_id IS NOT NULL THEN
+        UPDATE sources SET
+            total_news = GREATEST(total_news - 1, 0),
+            today_news = CASE
+                WHEN DATE(OLD.created_at) = CURDATE() THEN GREATEST(today_news - 1, 0)
+                ELSE today_news
+            END
+        WHERE source_id = OLD.source_id;
     END IF;
 END //
 
@@ -904,11 +923,8 @@ BEGIN
         SET v_term_count = v_term_count + 1;
     END IF;
 
-    -- 记录日志
-    INSERT INTO index_build_logs (news_id, term_count, build_method)
-    VALUES (p_news_id, v_term_count, 'json_batch_with_country');
-
-    SELECT ROW_COUNT() AS indexed_terms;
+    -- 返回索引词数
+    SELECT v_term_count AS indexed_terms;
 END //
 
 -- 【保留】一站式新闻入库（适配XML索引版本）
@@ -964,7 +980,7 @@ proc_main: BEGIN
         SET p_news_id = v_existing_id;
         LEAVE proc_main;
     END IF;
-    
+
     -- 检查2：title 是否已存在（不同媒体互转同一新闻）
     SELECT news_id INTO v_existing_id
     FROM news
@@ -1018,13 +1034,13 @@ proc_main: BEGIN
         ELSEIF p_hint_category = 'science' THEN SET @v_mapped_cat = 'tech';
         ELSE SET @v_mapped_cat = 'else';  -- general / health 等未明确分类的归到 else
         END IF;
-        
-        SELECT category_id INTO @v_cat_id 
-        FROM categories 
-        WHERE category_code COLLATE utf8mb4_unicode_ci = @v_mapped_cat COLLATE utf8mb4_unicode_ci 
+
+        SELECT category_id INTO @v_cat_id
+        FROM categories
+        WHERE category_code COLLATE utf8mb4_unicode_ci = @v_mapped_cat COLLATE utf8mb4_unicode_ci
         LIMIT 1;
         IF @v_cat_id IS NOT NULL THEN
-            INSERT IGNORE INTO news_categories (news_id, category_id, confidence) 
+            INSERT IGNORE INTO news_categories (news_id, category_id, confidence)
             VALUES (p_news_id, @v_cat_id, 1.0);
             SET p_status = CONCAT(p_status, ', Category: ', @v_mapped_cat);
         END IF;
@@ -1032,177 +1048,244 @@ proc_main: BEGIN
 
     -- 36氪 来源强制归入科技分类
     IF p_source_id = 2 THEN
-        SELECT category_id INTO @v_cat_id 
-        FROM categories 
-        WHERE category_code COLLATE utf8mb4_unicode_ci = 'tech' COLLATE utf8mb4_unicode_ci 
+        SELECT category_id INTO @v_cat_id
+        FROM categories
+        WHERE category_code COLLATE utf8mb4_unicode_ci = 'tech' COLLATE utf8mb4_unicode_ci
         LIMIT 1;
         IF @v_cat_id IS NOT NULL THEN
-            INSERT IGNORE INTO news_categories (news_id, category_id, confidence) 
+            INSERT IGNORE INTO news_categories (news_id, category_id, confidence)
             VALUES (p_news_id, @v_cat_id, 1.0);
             SET p_status = CONCAT(p_status, ', Category: tech');
         END IF;
     END IF;
 
-    -- 强制来源分类：特定新闻源直接映射到固定分类，不再走关键词多分类
+    -- ============================================
+    -- 【双分类逻辑】关键词计数取Top2（最多2个分类）
+    -- ============================================
+
+    -- 1. 固定来源映射（优先级最高，直接单一分类）
     IF p_source_id = 10 THEN  -- 凤凰网-军事 -> 军事
-        SELECT category_id INTO @v_cat_id 
-        FROM categories 
-        WHERE category_code COLLATE utf8mb4_unicode_ci = 'military' COLLATE utf8mb4_unicode_ci 
-        LIMIT 1;
-        IF @v_cat_id IS NOT NULL THEN
-            INSERT IGNORE INTO news_categories (news_id, category_id, confidence) 
-            VALUES (p_news_id, @v_cat_id, 1.0);
-            SET p_status = CONCAT(p_status, ', Category: military');
-        END IF;
-        INSERT INTO api_request_logs (source_id, request_type, request_url, fetched_count, created_at)
-        VALUES (p_source_id, 'procedure_insert', p_source_url, 1, NOW());
-        SET p_status = 'Success';
-        SELECT p_news_id AS news_id, p_status AS status, v_lang AS detected_language;
-        LEAVE proc_main;
-    END IF;
-
-    IF p_source_id = 12 THEN  -- 经济日报 -> 经济
-        SELECT category_id INTO @v_cat_id 
-        FROM categories 
-        WHERE category_code COLLATE utf8mb4_unicode_ci = 'economy' COLLATE utf8mb4_unicode_ci 
-        LIMIT 1;
-        IF @v_cat_id IS NOT NULL THEN
-            INSERT IGNORE INTO news_categories (news_id, category_id, confidence) 
-            VALUES (p_news_id, @v_cat_id, 1.0);
-            SET p_status = CONCAT(p_status, ', Category: economy');
-        END IF;
-        INSERT INTO api_request_logs (source_id, request_type, request_url, fetched_count, created_at)
-        VALUES (p_source_id, 'procedure_insert', p_source_url, 1, NOW());
-        SET p_status = 'Success';
-        SELECT p_news_id AS news_id, p_status AS status, v_lang AS detected_language;
-        LEAVE proc_main;
-    END IF;
-
-    IF p_source_id = 7 THEN  -- FoxNews-Politics -> 政治
-        SELECT category_id INTO @v_cat_id 
-        FROM categories 
-        WHERE category_code COLLATE utf8mb4_unicode_ci = 'politics' COLLATE utf8mb4_unicode_ci 
-        LIMIT 1;
-        IF @v_cat_id IS NOT NULL THEN
-            INSERT IGNORE INTO news_categories (news_id, category_id, confidence) 
-            VALUES (p_news_id, @v_cat_id, 1.0);
-            SET p_status = CONCAT(p_status, ', Category: politics');
-        END IF;
-        INSERT INTO api_request_logs (source_id, request_type, request_url, fetched_count, created_at)
-        VALUES (p_source_id, 'procedure_insert', p_source_url, 1, NOW());
-        SET p_status = 'Success';
-        SELECT p_news_id AS news_id, p_status AS status, v_lang AS detected_language;
-        LEAVE proc_main;
-    END IF;
-
-    -- 分类识别逻辑（支持多分类）
-    -- 科技
-    IF  v_full_text LIKE '%学术%' OR v_full_text LIKE '%人工智能%' OR v_full_text LIKE '%芯片%' OR v_full_text LIKE '%OpenAI%'
-       OR v_full_text LIKE '%science%' OR v_full_text LIKE '%科学家%' OR v_full_text LIKE '%机器人%'
-       OR v_full_text LIKE '%航天%' OR v_full_text LIKE '%量子%' OR v_full_text LIKE '%中科院%'
-       OR v_full_text LIKE '%aerospace%' OR v_full_text LIKE '%天文%' OR v_full_text LIKE '%算力%' OR v_full_text LIKE '%大模型%'
-       OR v_full_text LIKE '%academic%' OR v_full_text LIKE '%科研%' THEN
-        SELECT category_id INTO @v_cat_id FROM categories WHERE category_code COLLATE utf8mb4_unicode_ci = 'tech' COLLATE utf8mb4_unicode_ci LIMIT 1;
-        IF @v_cat_id IS NOT NULL THEN
-            INSERT IGNORE INTO news_categories (news_id, category_id, confidence) VALUES (p_news_id, @v_cat_id, 1.0);
-            SET p_status = CONCAT(p_status, ', Category: tech');
-        END IF;
-    END IF;
-
-    -- 政治
-    IF v_full_text LIKE '%政治%' OR v_full_text LIKE '%politic%' OR v_full_text LIKE '%diplomacy%'
-       OR v_full_text LIKE '%Parliament%' OR v_full_text LIKE '%人大%' OR v_full_text LIKE '%政协%'
-       OR v_full_text LIKE '%联合国%' OR v_full_text LIKE '%决议%' OR v_full_text LIKE '%UN%'
-       OR v_full_text LIKE '%election%' OR v_full_text LIKE '%游行%' OR v_full_text LIKE '%法律%'
-       OR v_full_text LIKE '%总理%' OR v_full_text LIKE '%chancellor%' OR v_full_text LIKE '%社会%'
-       OR v_full_text LIKE '%民意%' OR v_full_text LIKE '%society%' OR v_full_text LIKE '%总统%'
-       OR v_full_text LIKE '%parade%' OR v_full_text LIKE '%Senate%' OR v_full_text LIKE '%议会%'
-       OR v_full_text LIKE '%Parliament%' OR v_full_text LIKE '%议员%' OR v_full_text LIKE '%党%' THEN
-        SELECT category_id INTO @v_cat_id FROM categories WHERE category_code COLLATE utf8mb4_unicode_ci = 'politics' COLLATE utf8mb4_unicode_ci LIMIT 1;
-        IF @v_cat_id IS NOT NULL THEN
-            INSERT IGNORE INTO news_categories (news_id, category_id, confidence) VALUES (p_news_id, @v_cat_id, 1.0);
-            SET p_status = CONCAT(p_status, ', Category: politics');
-        END IF;
-    END IF;
-
-    -- 经济
-    IF v_full_text LIKE '%经济%' OR v_full_text LIKE '%economy%' OR v_full_text LIKE '%金融%'
-       OR v_full_text LIKE '%财政%' OR v_full_text LIKE '%finance%' OR v_full_text LIKE '%外贸%'
-       OR v_full_text LIKE '%股票%' OR v_full_text LIKE '%GDP%' OR v_full_text LIKE '%物价%'
-       OR v_full_text LIKE '%上市%' OR v_full_text LIKE '%市值%' OR v_full_text LIKE '%CPI%'
-       OR v_full_text LIKE '%A股%' OR v_full_text LIKE '%美股%' OR v_full_text LIKE '%央行%'
-       OR v_full_text LIKE '%trade%' OR v_full_text LIKE '%stock%' OR v_full_text LIKE '%市场%'
-       OR v_full_text LIKE '%融资%' OR v_full_text LIKE '%国债%' OR v_full_text LIKE '%debt%'
-       OR v_full_text LIKE '%通胀%' OR v_full_text LIKE '%inflation%' OR v_full_text LIKE '%USD%'
-       OR v_full_text LIKE '%破产%' OR v_full_text LIKE '%投资%' OR v_full_text LIKE '%净利润%'
-       OR v_full_text LIKE '%供应链%' OR v_full_text LIKE '%企业%' OR v_full_text LIKE '%enterprise%' THEN
-        SELECT category_id INTO @v_cat_id FROM categories WHERE category_code COLLATE utf8mb4_unicode_ci = 'economy' COLLATE utf8mb4_unicode_ci LIMIT 1;
-        IF @v_cat_id IS NOT NULL THEN
-            INSERT IGNORE INTO news_categories (news_id, category_id, confidence) VALUES (p_news_id, @v_cat_id, 1.0);
-            SET p_status = CONCAT(p_status, ', Category: economy');
-        END IF;
-    END IF;
-
-    -- 军事
-    IF v_full_text LIKE '%军事%' OR v_full_text LIKE '%military%' OR v_full_text LIKE '%武器%'
-       OR v_full_text LIKE '%war%' OR v_full_text LIKE '%航母%' OR v_full_text LIKE '%战机%'
-       OR v_full_text LIKE '%conflict%'  OR v_full_text LIKE '%战争%'OR v_full_text LIKE '%核武器%'
-       OR v_full_text LIKE '%国防部%' OR v_full_text LIKE '%airstrike%'
-       OR v_full_text LIKE '%空袭%' OR v_full_text LIKE '%陆军%' OR v_full_text LIKE '%海军%'
-       OR v_full_text LIKE '%轰炸%' OR v_full_text LIKE '%潜艇%' OR v_full_text LIKE '%导弹%'
-       OR v_full_text LIKE '%missile%' OR v_full_text LIKE '%袭击%' OR v_full_text LIKE '%submarine%'
-       OR v_full_text LIKE '%空军%' OR v_full_text LIKE '%海军陆战队%' OR v_full_text LIKE '%Navy%'
-       OR v_full_text LIKE '%battleship%' OR v_full_text LIKE '%军费%' OR v_full_text LIKE '%征兵%'
-       OR v_full_text LIKE '%军事基地%' OR v_full_text LIKE '%军队%' THEN
         SELECT category_id INTO @v_cat_id FROM categories WHERE category_code COLLATE utf8mb4_unicode_ci = 'military' COLLATE utf8mb4_unicode_ci LIMIT 1;
         IF @v_cat_id IS NOT NULL THEN
             INSERT IGNORE INTO news_categories (news_id, category_id, confidence) VALUES (p_news_id, @v_cat_id, 1.0);
             SET p_status = CONCAT(p_status, ', Category: military');
         END IF;
-    END IF;
-
-    -- 体育
-    IF v_full_text LIKE '%体育%' OR v_full_text LIKE '%sports%' OR v_full_text LIKE '%足球%'
-       OR v_full_text LIKE '%奥运%' OR v_full_text LIKE '%Olympic%' OR v_full_text LIKE '%羽毛球%'
-       OR v_full_text LIKE '%游泳%' OR v_full_text LIKE '%排球%'OR v_full_text LIKE '%世界杯%'
-       OR v_full_text LIKE '%NBA%' OR v_full_text LIKE '%乒乓球%'OR v_full_text LIKE '%篮球%'
-       OR v_full_text LIKE '%网球%' OR v_full_text LIKE '%田径%'  OR v_full_text LIKE '%basketball%'
-       OR v_full_text LIKE '%tennis%' OR v_full_text LIKE '%World Cup%' THEN
-        SELECT category_id INTO @v_cat_id FROM categories WHERE category_code COLLATE utf8mb4_unicode_ci = 'sports' COLLATE utf8mb4_unicode_ci LIMIT 1;
+        SET p_status = 'Success';
+        SELECT p_news_id AS news_id, p_status AS status, v_lang AS detected_language;
+        LEAVE proc_main;
+    ELSEIF p_source_id = 12 THEN  -- 经济日报 -> 经济
+        SELECT category_id INTO @v_cat_id FROM categories WHERE category_code COLLATE utf8mb4_unicode_ci = 'economy' COLLATE utf8mb4_unicode_ci LIMIT 1;
         IF @v_cat_id IS NOT NULL THEN
             INSERT IGNORE INTO news_categories (news_id, category_id, confidence) VALUES (p_news_id, @v_cat_id, 1.0);
-            SET p_status = CONCAT(p_status, ', Category: sports');
+            SET p_status = CONCAT(p_status, ', Category: economy');
         END IF;
-    END IF;
-
-    -- 文化
-    IF v_full_text LIKE '%文化%' OR v_full_text LIKE '%culture%' OR v_full_text LIKE '%文旅%'
-       OR v_full_text LIKE '%节日%' OR v_full_text LIKE '%电视剧%' OR v_full_text LIKE '%电影%'
-       OR v_full_text LIKE '%games%' OR v_full_text LIKE '%游戏%' OR v_full_text LIKE '%宗教%'
-       OR v_full_text LIKE '%movie%' OR v_full_text LIKE '%文学%' OR v_full_text LIKE '%literature%'
-       OR v_full_text LIKE '%博物馆%' OR v_full_text LIKE '%演出%' OR v_full_text LIKE '%假期%'
-       OR v_full_text LIKE '%Museum%' THEN
-        SELECT category_id INTO @v_cat_id FROM categories WHERE category_code COLLATE utf8mb4_unicode_ci = 'culture' COLLATE utf8mb4_unicode_ci LIMIT 1;
+        SET p_status = 'Success';
+        SELECT p_news_id AS news_id, p_status AS status, v_lang AS detected_language;
+        LEAVE proc_main;
+    ELSEIF p_source_id = 7 THEN  -- FoxNews-Politics -> 政治
+        SELECT category_id INTO @v_cat_id FROM categories WHERE category_code COLLATE utf8mb4_unicode_ci = 'politics' COLLATE utf8mb4_unicode_ci LIMIT 1;
         IF @v_cat_id IS NOT NULL THEN
             INSERT IGNORE INTO news_categories (news_id, category_id, confidence) VALUES (p_news_id, @v_cat_id, 1.0);
-            SET p_status = CONCAT(p_status, ', Category: culture');
+            SET p_status = CONCAT(p_status, ', Category: politics');
         END IF;
+        SET p_status = 'Success';
+        SELECT p_news_id AS news_id, p_status AS status, v_lang AS detected_language;
+        LEAVE proc_main;
     END IF;
 
-    -- 兜底：没有任何分类匹配时，归入 else（其他）
-    IF (SELECT COUNT(*) FROM news_categories WHERE news_id = p_news_id) = 0 THEN
-        SELECT category_id INTO @v_cat_id FROM categories WHERE category_code COLLATE utf8mb4_unicode_ci = IFNULL(p_hint_category, 'else') COLLATE utf8mb4_unicode_ci LIMIT 1;
+    -- 2. 初始化分类计数变量
+    SET @cnt_tech = 0, @cnt_politics = 0, @cnt_economy = 0,
+        @cnt_military = 0, @cnt_sports = 0, @cnt_culture = 0;
+
+    -- 3. 科技类关键词计数
+    IF v_full_text LIKE '%学术%' THEN SET @cnt_tech = @cnt_tech + 1; END IF;
+    IF v_full_text LIKE '%人工智能%' THEN SET @cnt_tech = @cnt_tech + 1; END IF;
+    IF v_full_text LIKE '%芯片%' THEN SET @cnt_tech = @cnt_tech + 1; END IF;
+    IF v_full_text LIKE '%OpenAI%' THEN SET @cnt_tech = @cnt_tech + 1; END IF;
+    IF v_full_text LIKE '%science%' THEN SET @cnt_tech = @cnt_tech + 1; END IF;
+    IF v_full_text LIKE '%科学家%' THEN SET @cnt_tech = @cnt_tech + 1; END IF;
+    IF v_full_text LIKE '%机器人%' THEN SET @cnt_tech = @cnt_tech + 1; END IF;
+    IF v_full_text LIKE '%航天%' THEN SET @cnt_tech = @cnt_tech + 1; END IF;
+    IF v_full_text LIKE '%量子%' THEN SET @cnt_tech = @cnt_tech + 1; END IF;
+    IF v_full_text LIKE '%中科院%' THEN SET @cnt_tech = @cnt_tech + 1; END IF;
+    IF v_full_text LIKE '%aerospace%' THEN SET @cnt_tech = @cnt_tech + 1; END IF;
+    IF v_full_text LIKE '%天文%' THEN SET @cnt_tech = @cnt_tech + 1; END IF;
+    IF v_full_text LIKE '%算力%' THEN SET @cnt_tech = @cnt_tech + 1; END IF;
+    IF v_full_text LIKE '%大模型%' THEN SET @cnt_tech = @cnt_tech + 1; END IF;
+    IF v_full_text LIKE '%academic%' THEN SET @cnt_tech = @cnt_tech + 1; END IF;
+    IF v_full_text LIKE '%科研%' THEN SET @cnt_tech = @cnt_tech + 1; END IF;
+
+    -- 4. 政治类关键词计数
+    IF v_full_text LIKE '%政治%' THEN SET @cnt_politics = @cnt_politics + 1; END IF;
+    IF v_full_text LIKE '%politic%' THEN SET @cnt_politics = @cnt_politics + 1; END IF;
+    IF v_full_text LIKE '%diplomacy%' THEN SET @cnt_politics = @cnt_politics + 1; END IF;
+    IF v_full_text LIKE '%Parliament%' THEN SET @cnt_politics = @cnt_politics + 1; END IF;
+    IF v_full_text LIKE '%人大%' THEN SET @cnt_politics = @cnt_politics + 1; END IF;
+    IF v_full_text LIKE '%政协%' THEN SET @cnt_politics = @cnt_politics + 1; END IF;
+    IF v_full_text LIKE '%联合国%' THEN SET @cnt_politics = @cnt_politics + 1; END IF;
+    IF v_full_text LIKE '%决议%' THEN SET @cnt_politics = @cnt_politics + 1; END IF;
+    IF v_full_text LIKE '%UN%' THEN SET @cnt_politics = @cnt_politics + 1; END IF;
+    IF v_full_text LIKE '%election%' THEN SET @cnt_politics = @cnt_politics + 1; END IF;
+    IF v_full_text LIKE '%游行%' THEN SET @cnt_politics = @cnt_politics + 1; END IF;
+    IF v_full_text LIKE '%法律%' THEN SET @cnt_politics = @cnt_politics + 1; END IF;
+    IF v_full_text LIKE '%总理%' THEN SET @cnt_politics = @cnt_politics + 1; END IF;
+    IF v_full_text LIKE '%chancellor%' THEN SET @cnt_politics = @cnt_politics + 1; END IF;
+    IF v_full_text LIKE '%社会%' THEN SET @cnt_politics = @cnt_politics + 1; END IF;
+    IF v_full_text LIKE '%民意%' THEN SET @cnt_politics = @cnt_politics + 1; END IF;
+    IF v_full_text LIKE '%society%' THEN SET @cnt_politics = @cnt_politics + 1; END IF;
+    IF v_full_text LIKE '%总统%' THEN SET @cnt_politics = @cnt_politics + 1; END IF;
+    IF v_full_text LIKE '%parade%' THEN SET @cnt_politics = @cnt_politics + 1; END IF;
+    IF v_full_text LIKE '%Senate%' THEN SET @cnt_politics = @cnt_politics + 1; END IF;
+    IF v_full_text LIKE '%议会%' THEN SET @cnt_politics = @cnt_politics + 1; END IF;
+    IF v_full_text LIKE '%议员%' THEN SET @cnt_politics = @cnt_politics + 1; END IF;
+    IF v_full_text LIKE '%党%' THEN SET @cnt_politics = @cnt_politics + 1; END IF;
+
+    -- 5. 经济类关键词计数
+    IF v_full_text LIKE '%经济%' THEN SET @cnt_economy = @cnt_economy + 1; END IF;
+    IF v_full_text LIKE '%economy%' THEN SET @cnt_economy = @cnt_economy + 1; END IF;
+    IF v_full_text LIKE '%金融%' THEN SET @cnt_economy = @cnt_economy + 1; END IF;
+    IF v_full_text LIKE '%财政%' THEN SET @cnt_economy = @cnt_economy + 1; END IF;
+    IF v_full_text LIKE '%finance%' THEN SET @cnt_economy = @cnt_economy + 1; END IF;
+    IF v_full_text LIKE '%外贸%' THEN SET @cnt_economy = @cnt_economy + 1; END IF;
+    IF v_full_text LIKE '%股票%' THEN SET @cnt_economy = @cnt_economy + 1; END IF;
+    IF v_full_text LIKE '%GDP%' THEN SET @cnt_economy = @cnt_economy + 1; END IF;
+    IF v_full_text LIKE '%物价%' THEN SET @cnt_economy = @cnt_economy + 1; END IF;
+    IF v_full_text LIKE '%上市%' THEN SET @cnt_economy = @cnt_economy + 1; END IF;
+    IF v_full_text LIKE '%市值%' THEN SET @cnt_economy = @cnt_economy + 1; END IF;
+    IF v_full_text LIKE '%CPI%' THEN SET @cnt_economy = @cnt_economy + 1; END IF;
+    IF v_full_text LIKE '%A股%' THEN SET @cnt_economy = @cnt_economy + 1; END IF;
+    IF v_full_text LIKE '%美股%' THEN SET @cnt_economy = @cnt_economy + 1; END IF;
+    IF v_full_text LIKE '%央行%' THEN SET @cnt_economy = @cnt_economy + 1; END IF;
+    IF v_full_text LIKE '%trade%' THEN SET @cnt_economy = @cnt_economy + 1; END IF;
+    IF v_full_text LIKE '%stock%' THEN SET @cnt_economy = @cnt_economy + 1; END IF;
+    IF v_full_text LIKE '%市场%' THEN SET @cnt_economy = @cnt_economy + 1; END IF;
+    IF v_full_text LIKE '%融资%' THEN SET @cnt_economy = @cnt_economy + 1; END IF;
+    IF v_full_text LIKE '%国债%' THEN SET @cnt_economy = @cnt_economy + 1; END IF;
+    IF v_full_text LIKE '%debt%' THEN SET @cnt_economy = @cnt_economy + 1; END IF;
+    IF v_full_text LIKE '%通胀%' THEN SET @cnt_economy = @cnt_economy + 1; END IF;
+    IF v_full_text LIKE '%inflation%' THEN SET @cnt_economy = @cnt_economy + 1; END IF;
+    IF v_full_text LIKE '%USD%' THEN SET @cnt_economy = @cnt_economy + 1; END IF;
+    IF v_full_text LIKE '%破产%' THEN SET @cnt_economy = @cnt_economy + 1; END IF;
+    IF v_full_text LIKE '%投资%' THEN SET @cnt_economy = @cnt_economy + 1; END IF;
+    IF v_full_text LIKE '%净利润%' THEN SET @cnt_economy = @cnt_economy + 1; END IF;
+    IF v_full_text LIKE '%供应链%' THEN SET @cnt_economy = @cnt_economy + 1; END IF;
+    IF v_full_text LIKE '%企业%' THEN SET @cnt_economy = @cnt_economy + 1; END IF;
+    IF v_full_text LIKE '%enterprise%' THEN SET @cnt_economy = @cnt_economy + 1; END IF;
+
+    -- 6. 军事类关键词计数
+    IF v_full_text LIKE '%军事%' THEN SET @cnt_military = @cnt_military + 1; END IF;
+    IF v_full_text LIKE '%military%' THEN SET @cnt_military = @cnt_military + 1; END IF;
+    IF v_full_text LIKE '%武器%' THEN SET @cnt_military = @cnt_military + 1; END IF;
+    IF v_full_text LIKE '%war%' THEN SET @cnt_military = @cnt_military + 1; END IF;
+    IF v_full_text LIKE '%航母%' THEN SET @cnt_military = @cnt_military + 1; END IF;
+    IF v_full_text LIKE '%战机%' THEN SET @cnt_military = @cnt_military + 1; END IF;
+    IF v_full_text LIKE '%conflict%' THEN SET @cnt_military = @cnt_military + 1; END IF;
+    IF v_full_text LIKE '%战争%' THEN SET @cnt_military = @cnt_military + 1; END IF;
+    IF v_full_text LIKE '%核武器%' THEN SET @cnt_military = @cnt_military + 1; END IF;
+    IF v_full_text LIKE '%国防部%' THEN SET @cnt_military = @cnt_military + 1; END IF;
+    IF v_full_text LIKE '%airstrike%' THEN SET @cnt_military = @cnt_military + 1; END IF;
+    IF v_full_text LIKE '%空袭%' THEN SET @cnt_military = @cnt_military + 1; END IF;
+    IF v_full_text LIKE '%陆军%' THEN SET @cnt_military = @cnt_military + 1; END IF;
+    IF v_full_text LIKE '%海军%' THEN SET @cnt_military = @cnt_military + 1; END IF;
+    IF v_full_text LIKE '%轰炸%' THEN SET @cnt_military = @cnt_military + 1; END IF;
+    IF v_full_text LIKE '%潜艇%' THEN SET @cnt_military = @cnt_military + 1; END IF;
+    IF v_full_text LIKE '%导弹%' THEN SET @cnt_military = @cnt_military + 1; END IF;
+    IF v_full_text LIKE '%missile%' THEN SET @cnt_military = @cnt_military + 1; END IF;
+    IF v_full_text LIKE '%袭击%' THEN SET @cnt_military = @cnt_military + 1; END IF;
+    IF v_full_text LIKE '%submarine%' THEN SET @cnt_military = @cnt_military + 1; END IF;
+    IF v_full_text LIKE '%空军%' THEN SET @cnt_military = @cnt_military + 1; END IF;
+    IF v_full_text LIKE '%海军陆战队%' THEN SET @cnt_military = @cnt_military + 1; END IF;
+    IF v_full_text LIKE '%Navy%' THEN SET @cnt_military = @cnt_military + 1; END IF;
+    IF v_full_text LIKE '%battleship%' THEN SET @cnt_military = @cnt_military + 1; END IF;
+    IF v_full_text LIKE '%军费%' THEN SET @cnt_military = @cnt_military + 1; END IF;
+    IF v_full_text LIKE '%征兵%' THEN SET @cnt_military = @cnt_military + 1; END IF;
+    IF v_full_text LIKE '%军事基地%' THEN SET @cnt_military = @cnt_military + 1; END IF;
+    IF v_full_text LIKE '%军队%' THEN SET @cnt_military = @cnt_military + 1; END IF;
+
+    -- 7. 体育类关键词计数
+    IF v_full_text LIKE '%体育%' THEN SET @cnt_sports = @cnt_sports + 1; END IF;
+    IF v_full_text LIKE '%sports%' THEN SET @cnt_sports = @cnt_sports + 1; END IF;
+    IF v_full_text LIKE '%足球%' THEN SET @cnt_sports = @cnt_sports + 1; END IF;
+    IF v_full_text LIKE '%奥运%' THEN SET @cnt_sports = @cnt_sports + 1; END IF;
+    IF v_full_text LIKE '%Olympic%' THEN SET @cnt_sports = @cnt_sports + 1; END IF;
+    IF v_full_text LIKE '%羽毛球%' THEN SET @cnt_sports = @cnt_sports + 1; END IF;
+    IF v_full_text LIKE '%游泳%' THEN SET @cnt_sports = @cnt_sports + 1; END IF;
+    IF v_full_text LIKE '%排球%' THEN SET @cnt_sports = @cnt_sports + 1; END IF;
+    IF v_full_text LIKE '%世界杯%' THEN SET @cnt_sports = @cnt_sports + 1; END IF;
+    IF v_full_text LIKE '%NBA%' THEN SET @cnt_sports = @cnt_sports + 1; END IF;
+    IF v_full_text LIKE '%乒乓球%' THEN SET @cnt_sports = @cnt_sports + 1; END IF;
+    IF v_full_text LIKE '%篮球%' THEN SET @cnt_sports = @cnt_sports + 1; END IF;
+    IF v_full_text LIKE '%网球%' THEN SET @cnt_sports = @cnt_sports + 1; END IF;
+    IF v_full_text LIKE '%田径%' THEN SET @cnt_sports = @cnt_sports + 1; END IF;
+    IF v_full_text LIKE '%basketball%' THEN SET @cnt_sports = @cnt_sports + 1; END IF;
+    IF v_full_text LIKE '%tennis%' THEN SET @cnt_sports = @cnt_sports + 1; END IF;
+    IF v_full_text LIKE '%World Cup%' THEN SET @cnt_sports = @cnt_sports + 1; END IF;
+
+    -- 8. 文化类关键词计数
+    IF v_full_text LIKE '%文化%' THEN SET @cnt_culture = @cnt_culture + 1; END IF;
+    IF v_full_text LIKE '%culture%' THEN SET @cnt_culture = @cnt_culture + 1; END IF;
+    IF v_full_text LIKE '%文旅%' THEN SET @cnt_culture = @cnt_culture + 1; END IF;
+    IF v_full_text LIKE '%节日%' THEN SET @cnt_culture = @cnt_culture + 1; END IF;
+    IF v_full_text LIKE '%电视剧%' THEN SET @cnt_culture = @cnt_culture + 1; END IF;
+    IF v_full_text LIKE '%电影%' THEN SET @cnt_culture = @cnt_culture + 1; END IF;
+    IF v_full_text LIKE '%games%' THEN SET @cnt_culture = @cnt_culture + 1; END IF;
+    IF v_full_text LIKE '%游戏%' THEN SET @cnt_culture = @cnt_culture + 1; END IF;
+    IF v_full_text LIKE '%宗教%' THEN SET @cnt_culture = @cnt_culture + 1; END IF;
+    IF v_full_text LIKE '%movie%' THEN SET @cnt_culture = @cnt_culture + 1; END IF;
+    IF v_full_text LIKE '%文学%' THEN SET @cnt_culture = @cnt_culture + 1; END IF;
+    IF v_full_text LIKE '%literature%' THEN SET @cnt_culture = @cnt_culture + 1; END IF;
+    IF v_full_text LIKE '%博物馆%' THEN SET @cnt_culture = @cnt_culture + 1; END IF;
+    IF v_full_text LIKE '%演出%' THEN SET @cnt_culture = @cnt_culture + 1; END IF;
+    IF v_full_text LIKE '%假期%' THEN SET @cnt_culture = @cnt_culture + 1; END IF;
+    IF v_full_text LIKE '%Museum%' THEN SET @cnt_culture = @cnt_culture + 1; END IF;
+
+    -- 9. 找出Top2分类（变量比较法）
+    -- 使用IF嵌套找出最大值和次大值
+    SET @max1_code = NULL, @max1_cnt = 0, @max2_code = NULL, @max2_cnt = 0;
+
+    -- 比较找出第一名
+    IF @cnt_tech >= @max1_cnt THEN SET @max1_code = 'tech'; SET @max1_cnt = @cnt_tech; END IF;
+    IF @cnt_politics >= @max1_cnt THEN SET @max1_code = 'politics'; SET @max1_cnt = @cnt_politics; END IF;
+    IF @cnt_economy >= @max1_cnt THEN SET @max1_code = 'economy'; SET @max1_cnt = @cnt_economy; END IF;
+    IF @cnt_military >= @max1_cnt THEN SET @max1_code = 'military'; SET @max1_cnt = @cnt_military; END IF;
+    IF @cnt_sports >= @max1_cnt THEN SET @max1_code = 'sports'; SET @max1_cnt = @cnt_sports; END IF;
+    IF @cnt_culture >= @max1_cnt THEN SET @max1_code = 'culture'; SET @max1_cnt = @cnt_culture; END IF;
+
+    -- 比较找出第二名（排除第一名）
+    IF @max1_code != 'tech' AND @cnt_tech >= @max2_cnt THEN SET @max2_code = 'tech'; SET @max2_cnt = @cnt_tech; END IF;
+    IF @max1_code != 'politics' AND @cnt_politics >= @max2_cnt THEN SET @max2_code = 'politics'; SET @max2_cnt = @cnt_politics; END IF;
+    IF @max1_code != 'economy' AND @cnt_economy >= @max2_cnt THEN SET @max2_code = 'economy'; SET @max2_cnt = @cnt_economy; END IF;
+    IF @max1_code != 'military' AND @cnt_military >= @max2_cnt THEN SET @max2_code = 'military'; SET @max2_cnt = @cnt_military; END IF;
+    IF @max1_code != 'sports' AND @cnt_sports >= @max2_cnt THEN SET @max2_code = 'sports'; SET @max2_cnt = @cnt_sports; END IF;
+    IF @max1_code != 'culture' AND @cnt_culture >= @max2_cnt THEN SET @max2_code = 'culture'; SET @max2_cnt = @cnt_culture; END IF;
+
+    -- 10. 插入Top2分类（如果计数>0），否则归入else
+    IF @max1_cnt = 0 THEN
+        -- 无任何分类匹配，归入else
+        SELECT category_id INTO @v_cat_id FROM categories WHERE category_code COLLATE utf8mb4_unicode_ci = 'else' COLLATE utf8mb4_unicode_ci LIMIT 1;
         IF @v_cat_id IS NOT NULL THEN
             INSERT IGNORE INTO news_categories (news_id, category_id, confidence) VALUES (p_news_id, @v_cat_id, 1.0);
-            SET p_status = CONCAT(p_status, ', Category: ', IFNULL(p_hint_category, 'else'));
+            SET p_status = CONCAT(p_status, ', Category: else');
+        END IF;
+    ELSE
+        -- 插入第一名
+        SELECT category_id INTO @v_cat_id FROM categories WHERE category_code COLLATE utf8mb4_unicode_ci = @max1_code COLLATE utf8mb4_unicode_ci LIMIT 1;
+        IF @v_cat_id IS NOT NULL THEN
+            INSERT IGNORE INTO news_categories (news_id, category_id, confidence) VALUES (p_news_id, @v_cat_id, 1.0);
+            SET p_status = CONCAT(p_status, ', Category1: ', @max1_code);
+        END IF;
+
+        -- 插入第二名（如果存在且计数>0）
+        IF @max2_cnt > 0 THEN
+            SELECT category_id INTO @v_cat_id FROM categories WHERE category_code COLLATE utf8mb4_unicode_ci = @max2_code COLLATE utf8mb4_unicode_ci LIMIT 1;
+            IF @v_cat_id IS NOT NULL THEN
+                INSERT IGNORE INTO news_categories (news_id, category_id, confidence) VALUES (p_news_id, @v_cat_id, 0.8);
+                SET p_status = CONCAT(p_status, ', Category2: ', @max2_code);
+            END IF;
         END IF;
     END IF;
 
     -- 【重要】不在这里构建索引，由Python分词后调用sp_build_xml_index
-    -- 或者插入一条待处理记录
-
-    INSERT INTO api_request_logs (source_id, request_type, request_url, fetched_count, created_at)
-    VALUES (p_source_id, 'procedure_insert', p_source_url, 1, NOW());
 
     SET p_status = 'Success';
     SELECT p_news_id AS news_id, p_status AS status, v_lang AS detected_language;
@@ -1215,7 +1298,6 @@ BEGIN
     SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci;
     DELETE FROM news WHERE created_at < DATE_SUB(NOW(), INTERVAL 48 HOUR);
     SET v_deleted = ROW_COUNT();
-    DELETE FROM api_request_logs WHERE created_at < DATE_SUB(NOW(), INTERVAL 7 DAY);
     SELECT v_deleted AS deleted_news_count;
 END //
 
@@ -1226,7 +1308,7 @@ DELIMITER ;
 -- ============================================
 
 CREATE EVENT evt_cleanup_news
-ON SCHEDULE EVERY 30 MINUTE
+ON SCHEDULE EVERY 20 MINUTE
 STARTS CURRENT_TIMESTAMP
 DO
   CALL sp_cleanup_48h();
@@ -1349,13 +1431,14 @@ DROP PROCEDURE IF EXISTS sp_cleanup_48h
 DROP PROCEDURE IF EXISTS sp_build_xml_index
 -- 按依赖顺序删除（子表先删）
 DROP TABLE IF EXISTS country_keywords;
+DROP TABLE IF EXISTS category_keywords;  -- 【新增】分类关键词表
+DROP TABLE IF EXISTS news_topics;        -- 【新增】新闻-话题关联表
+DROP TABLE IF EXISTS hot_topics;         -- 【新增】热点话题表
 DROP TABLE IF EXISTS inverted_index;
 DROP TABLE IF EXISTS media;
 DROP TABLE IF EXISTS news_categories;
 DROP TABLE IF EXISTS news_countries;
-DROP TABLE IF EXISTS api_request_logs;      -- 新增表1
-DROP TABLE IF EXISTS index_build_logs;      -- 新增表2
-DROP TABLE IF EXISTS source_stats;            -- 统计表
+-- 【注】api_request_logs、index_build_logs、source_stats已移除
 DROP TABLE IF EXISTS news;
 DROP TABLE IF EXISTS categories;
 DROP TABLE IF EXISTS sources;
@@ -1365,17 +1448,16 @@ DROP VIEW IF EXISTS v_news_detail;
 DROP PROCEDURE IF EXISTS sp_delete_news_transaction;
 DROP PROCEDURE IF EXISTS sp_build_index_and_log;
 DROP PROCEDURE IF EXISTS sp_insert_news_with_validation;
-DROP TRIGGER IF EXISTS trg_news_before_insert;  -- 如果之前创建了一半失败
-DROP TRIGGER IF EXISTS trg_news_after_insert;   -- 如果之前创建了一半失败
+DROP TRIGGER IF EXISTS trg_news_before_insert;   -- 如果之前创建了一半失败
+DROP TRIGGER IF EXISTS trg_news_after_insert;    -- 如果之前创建了一半失败
+DROP TRIGGER IF EXISTS trg_news_after_delete;    -- 【新增】删除触发器
 
 DELETE FROM inverted_index;
 DELETE FROM media;
 DELETE FROM news_categories;
 DELETE FROM news_countries;
 DELETE FROM news;
-DELETE FROM api_request_logs;      -- 新增表1
-DELETE FROM index_build_logs;      -- 新增表2
-DELETE FROM source_stats;            -- 统计表
+-- 【注】api_request_logs、index_build_logs、source_stats已移除
 DELETE FROM categories;
 DELETE FROM sources;
 
@@ -1386,4 +1468,80 @@ FROM news_countries
 WHERE country_code = 'US' AND is_primary = 1;
 
 SELECT * FROM media m  WHERE m.media_url ='%bbc%';
+
+-- 方法1：查看当前总行数（最直接）
+SELECT COUNT(*) as total_news FROM news;
+
+-- 方法2：查看ID范围（判断是否有删除）
+SELECT
+    MIN(news_id) as min_id,
+    MAX(news_id) as max_id,
+    COUNT(*) as actual_count,
+    (MAX(news_id) - MIN(news_id) + 1) as expected_count_if_no_delete,
+    (MAX(news_id) - MIN(news_id) + 1) - COUNT(*) as deleted_gap
+FROM news;
+
+-- 方法3：查看48小时前数据是否还存在（验证cleanup是否工作）
+SELECT
+    COUNT(*) as old_news_count,
+    MIN(created_at) as oldest_created,
+    MAX(created_at) as newest_created
+FROM news
+WHERE created_at < DATE_SUB(NOW(), INTERVAL 48 HOUR);
+
+-- 方法4：查看最近插入的数据（确认fetch是否正常）
+SELECT news_id, title, source_name, created_at
+FROM news
+ORDER BY news_id DESC
+LIMIT 5;
+SELECT NOW();
+-- 方法5：查看表状态（行数、数据大小）
+SHOW TABLE STATUS LIKE 'news';
+
+-- 1. 插入一条"48小时前的旧新闻"（应该被清理）
+INSERT INTO news (
+    title, content, summary, source_url, source_id,
+    published_at, created_at, language, has_video, click_count
+) VALUES
+('TEST_CLEANUP_OLD_48h', '这是一条测试数据，用于验证48小时清理', '测试摘要',
+ 'http://test-cleanup.com/old48h', 1,
+ DATE_SUB(NOW(), INTERVAL 50 HOUR),  -- published_at 50小时前
+ DATE_SUB(NOW(), INTERVAL 50 HOUR),  -- created_at 50小时前（关键！）
+ 'zh', FALSE, 0);
+
+-- 2. 插入一条"2小时前的新新闻"（不应该被清理）
+INSERT INTO news (
+    title, content, summary, source_url, source_id,
+    published_at, created_at, language, has_video, click_count
+) VALUES
+('TEST_CLEANUP_NEW_48 HOUR 30 MINUTE', '这是一条测试数据，用于验证保留逻辑', '测试摘要',
+ 'http://test-/new2h', 1,
+ DATE_SUB(NOW(),  INTERVAL 2910 MINUTE),   -- published_at 2小时前
+ DATE_SUB(NOW(),  INTERVAL 2910 MINUTE),   -- created_at 2小时前
+ 'zh', FALSE, 0);
+-- 3. 验证插入成功
+SELECT
+    news_id, title, source_id,
+    created_at,
+    TIMESTAMPDIFF(HOUR, created_at, NOW()) as hours_ago,
+    CASE
+        WHEN created_at < DATE_SUB(NOW(), INTERVAL 48 HOUR) THEN 'WILL_BE_DELETED'
+        ELSE 'WILL_BE_KEPT'
+    END as cleanup_status
+FROM news
+WHERE title LIKE 'TEST_CLEANUP%'
+ORDER BY created_at;
+
+-- 4. 手动触发清理（测试用）-- 注意：单节点DB谨慎执行
+CALL sp_cleanup_48h();
+
+-- 5. 验证清理结果
+SELECT
+    news_id, title, source_id,
+    created_at,
+    TIMESTAMPDIFF(HOUR, created_at, NOW()) as hours_ago
+FROM news
+WHERE title LIKE 'TEST_CLEANUP%'
+ORDER BY created_at;
+
 */

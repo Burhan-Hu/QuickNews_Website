@@ -5,6 +5,29 @@
 
 import React, { useRef, useMemo, useEffect, useState } from 'react';
 import { Canvas, useFrame, useLoader } from '@react-three/fiber';
+
+/**
+ * 计算热力点半径（分段增长逻辑）
+ * - 0-50条：原始增长逻辑（count/100）
+ * - 50-250条：增长速度减半
+ * - 250条以上：固定最大半径
+ */
+function calculateRadius(count) {
+  const baseRadius = 0.15;
+  
+  if (count <= 50) {
+    // 0-50条：原始逻辑
+    return baseRadius + (count / 100);
+  } else if (count <= 250) {
+    // 50-250条：增长减半
+    // 50条时半径：0.15 + 0.5 = 0.65
+    // 之后每增加200条增长1.0（即每100条增长0.5，是原来的一半）
+    return baseRadius + 0.5 + ((count - 50) / 200);
+  } else {
+    // 250条以上：固定半径（250条时的值：0.15 + 0.5 + 1.0 = 1.65）
+    return 1.65;
+  }
+}
 import { OrbitControls, Stars, Html } from '@react-three/drei';
 import * as THREE from 'three';
 import { latLonToVector3, getHeatmapColor, countryCoords } from '../utils/countryCoords';
@@ -83,7 +106,7 @@ function EarthSphere({
               onPointerOver={() => setHoveredCountry(code)}
               onPointerOut={() => setHoveredCountry(null)}
             >
-              <sphereGeometry args={[0.15 + (count / 100), 16, 16]} />
+              <sphereGeometry args={[calculateRadius(count), 16, 16]} />
               <meshBasicMaterial 
                 color={color} 
                 transparent 

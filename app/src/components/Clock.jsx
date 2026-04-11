@@ -1,5 +1,5 @@
 /**
- * 实时数字时钟组件
+ * 实时数字时钟组件 - 修复版
  * 显示当前时区时间，带发光效果
  */
 
@@ -18,7 +18,7 @@ export default function Clock({ className = '' }) {
     return () => clearInterval(timer);
   }, []);
   
-  // 格式化时间
+  // 格式化时间 - 确保始终是2位数字
   const formatTime = (date) => {
     const hours = String(date.getHours()).padStart(2, '0');
     const minutes = String(date.getMinutes()).padStart(2, '0');
@@ -45,32 +45,25 @@ export default function Clock({ className = '' }) {
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.6, ease: [0.4, 0, 0.2, 1] }}
     >
-      {/* 时间显示 */}
+      {/* 时间显示 - 使用固定key避免组件重新挂载 */}
       <div className="flex items-baseline font-['Orbitron'] text-[#00d4ff] glow-text-blue">
         <motion.span 
           className="text-5xl md:text-6xl font-bold tracking-wider"
-          key={hours}
-          initial={{ opacity: 0.8 }}
-          animate={{ opacity: 1 }}
+          key="hours"  /* 固定key，不再变化 */
         >
           {hours}
         </motion.span>
         <span className="text-4xl md:text-5xl mx-2 animate-pulse">:</span>
         <motion.span 
           className="text-5xl md:text-6xl font-bold tracking-wider"
-          key={minutes}
-          initial={{ opacity: 0.8 }}
-          animate={{ opacity: 1 }}
+          key="minutes"  /* 固定key */
         >
           {minutes}
         </motion.span>
         <span className="text-4xl md:text-5xl mx-2 animate-pulse">:</span>
         <motion.span 
           className="text-4xl md:text-5xl font-semibold tracking-wider text-[#00d4ff]/80"
-          key={seconds}
-          initial={{ opacity: 0.5, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ duration: 0.1 }}
+          key="seconds"  /* 固定key */
         >
           {seconds}
         </motion.span>

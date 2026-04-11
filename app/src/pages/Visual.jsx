@@ -3,6 +3,9 @@
  * 左侧 3D 地球热力图，右侧信息面板
  */
 
+// API基础URL（用于话题查询）
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
+
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
@@ -67,10 +70,40 @@ export default function Visual() {
   const handleTopicClick = async (topic) => {
     setLoading(true);
     try {
-      const news = await searchNews(`title:${topic}`, 20);
-      setNewsList(news);
+      // 如果有topic.id，使用话题API获取精准相关新闻
+      // 否则降级为标题搜索（兼容旧数据）
+      if (topic.id) {
+        const response = await fetch(`${API_BASE_URL}/api/topics/${topic.id}/news?limit=20`);
+        if (response.ok) {
+          const data = await response.json();
+          // 转换为统一的newsList格式
+          const formattedNews = data.news.map(news => ({
+            id: news.id,
+            title: news.title,
+            summary: news.summary,
+            country: news.country,
+            time: news.time
+          }));
+          setNewsList(formattedNews);
+        } else {
+          // 降级为标题搜索
+          const news = await searchNews(`title:${topic.name}`, 20);
+          setNewsList(news);
+        }
+      } else {
+        // 降级为标题搜索（无id时）
+        const news = await searchNews(`title:${topic.name}`, 20);
+        setNewsList(news);
+      }
     } catch (error) {
       console.error('Search error:', error);
+      // 出错时降级为标题搜索
+      try {
+        const news = await searchNews(`title:${topic.name}`, 20);
+        setNewsList(news);
+      } catch (e) {
+        console.error('Fallback search error:', e);
+      }
     } finally {
       setLoading(false);
     }
@@ -184,9 +217,9 @@ export default function Visual() {
                 {hotTopics.length > 0 ? (
                   hotTopics.map((topic, index) => (
                     <motion.button
-                      key={topic.name}
+                      key={topic.id || topic.name}
                       className="px-3 py-1.5 rounded-full glass text-sm text-white/70 hover:text-white hover:border-[#00d4ff]/50 transition-all"
-                      onClick={() => handleTopicClick(topic.name)}
+                      onClick={() => handleTopicClick(topic)}
                       initial={{ opacity: 0, scale: 0.8 }}
                       animate={{ opacity: 1, scale: 1 }}
                       transition={{ delay: 0.6 + index * 0.05, duration: 0.3 }}

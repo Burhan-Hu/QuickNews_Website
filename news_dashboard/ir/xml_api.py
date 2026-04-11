@@ -8,6 +8,11 @@ import xml.etree.ElementTree as ET
 import re
 import html
 import json
+from collections import defaultdict
+from datetime import datetime, timedelta
+
+# 停用词（用于话题聚类）
+STOP_WORDS = {'的', '了', '在', '是', '我', '有', '和', '就', '不', '人', '都', '一', '一个', '上', '也', '很', '到', '说', '要', '去', '你', '会', '着', '没有', '看', '好', '自己', '这', '那', '这些', '那些', '这个', '那个', '之', '与', '及', '或', '但', '而', '然而', '因为', '所以', '因此', '如果', '即使', '虽然', '尽管', '如此', '便', '由', '被', '把', '给', '让', '向', '往', '自', '从', '到', '关于', '对于', '为了', '为着', '除', '除了', '除去', 'the', 'be', 'to', 'of', 'and', 'a', 'in', 'that', 'have', 'i', 'it', 'for', 'not', 'on', 'with', 'he', 'as', 'you', 'do', 'at', 'this', 'but', 'his', 'by', 'from', 'they', 'we', 'say', 'her', 'she', 'or', 'an', 'will', 'my', 'one', 'all', 'would', 'there', 'their', 'what', 'so', 'up', 'out', 'if', 'about', 'who', 'get', 'which', 'go', 'me', 'when', 'make', 'can', 'like', 'time', 'no', 'just', 'him', 'know', 'take', 'people', 'into', 'year', 'your', 'good', 'some', 'could', 'them', 'see', 'other', 'than', 'then', 'now', 'look', 'only', 'come', 'its', 'over', 'think', 'also', 'back', 'after', 'use', 'two', 'how', 'our', 'work', 'first', 'well', 'way', 'even', 'new', 'want', 'because', 'any', 'these', 'give', 'day', 'most', 'us', 'is', 'was', 'are', 'were', 'been', 'has', 'had', 'did', 'does'}
 
 try:
     import jieba
@@ -696,91 +701,309 @@ def extract_en_phrases(title, news_id, phrases_dict):
 @app.route('/api/stats/topics', methods=['GET'])
 def get_hot_topics():
     """
-    获取近48小时内的热门话题 TOP 10
-    中英文分开统计后合并，避免英文被中文挤出
-    中文使用jieba分词，英文使用2-gram/3-gram
+    获取热点话题 TOP 10（直接从数据库查询）
+    
+    【说明】话题数据由爬虫任务自动维护：
+    - 每次爬取结束后立即重新聚类
+    - 数据始终与最新新闻同步
+    - 无需额外的过期检查或定时刷新
     """
     try:
         with engine.connect() as conn:
+            # 直接查询聚类结果（数据始终是最新的）
             result = conn.execute(text("""
-                SELECT n.news_id, n.title, n.language
-                FROM news n
-                WHERE n.created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR)
-                ORDER BY n.created_at DESC
-                LIMIT 500
+                SELECT topic_id, topic_name, news_count
+                FROM hot_topics
+                WHERE is_active = TRUE
+                ORDER BY news_count DESC, last_news_time DESC
+                LIMIT 10
             """))
-            rows = result.fetchall()
             
-            zh_phrases = {}
-            en_phrases = {}
+            topics = []
+            for row in result.fetchall():
+                topics.append({
+                    'id': row[0],
+                    'name': row[1],
+                    'count': row[2]
+                })
             
-            for row in rows:
-                news_id = row[0]
-                title = row[1] or ''
-                lang = row[2] or 'zh'
-                
-                if lang == 'zh':
-                    extract_meaningful_phrases(title, news_id, zh_phrases)
-                else:
-                    extract_en_phrases(title, news_id, en_phrases)
+            # 如果无数据（首次启动或特殊情况），降级为分类统计
+            if not topics:
+                print("[Topics] 无聚类数据，降级为分类统计")
+                result = conn.execute(text("""
+                    SELECT c.category_name, COUNT(*) as count
+                    FROM news n
+                    JOIN news_categories nc ON n.news_id = nc.news_id
+                    JOIN categories c ON nc.category_id = c.category_id
+                    WHERE n.created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR)
+                    GROUP BY c.category_id
+                    ORDER BY count DESC
+                    LIMIT 10
+                """))
+                topics = [{'id': None, 'name': row[0], 'count': row[1]} for row in result.fetchall()]
             
-            country_result = conn.execute(text("""
-                SELECT country_code, country_name, country_name_en 
-                FROM countries
-            """))
-            country_names = set()
-            country_codes = set()
-            for row in country_result.fetchall():
-                country_codes.add(row[0].lower())
-                if row[1]:
-                    country_names.add(row[1])
-                if row[2]:
-                    country_names.add(row[2].lower())
-            
-            def build_topics(phrases, min_freq):
-                ngrams = []
-                for phrase, data in phrases.items():
-                    doc_freq = data['count']
-                    length = data['length']
-                    if len(phrase) < 4:
-                        continue
-                    if phrase.isdigit():
-                        continue
-                    if re.match(r'^\d+年$|^\d+月$|^\d+日$', phrase):
-                        continue
-                    if phrase.lower() in country_codes or phrase in country_names:
-                        continue
-                    if is_meaningless_phrase(phrase):
-                        continue
-                    # 过滤纯英文无空格黏合词（如 oppositiongroupmembers）
-                    if re.fullmatch(r'[a-zA-Z]+', phrase) and len(phrase) > 10:
-                        continue
-                    score = doc_freq * (1 + 0.2 * length)
-                    if doc_freq >= min_freq:
-                        ngrams.append((phrase, score, doc_freq))
-                merged = merge_overlapping_ngrams(ngrams)
-                merged.sort(key=lambda x: x[1], reverse=True)
-                return merged
-            
-            zh_topics = build_topics(zh_phrases, 1)  # 中文门槛降到1，jieba长词重复率低
-            en_topics = build_topics(en_phrases, 1)  # 英文门槛保持1
-            
-            # 合并策略：中文优先，确保至少6个中文席位
-            top_topics = []
-            for phrase, score, count in zh_topics[:6]:
-                top_topics.append({'name': phrase, 'count': count})
-            for phrase, score, count in en_topics[:10 - len(top_topics)]:
-                top_topics.append({'name': phrase, 'count': count})
-            # 若英文不足，再用中文补
-            for phrase, score, count in zh_topics[6:10 - len(top_topics)]:
-                top_topics.append({'name': phrase, 'count': count})
-            
-            return jsonify(top_topics)
+            return jsonify(topics)
     except Exception as e:
         print(f"[API Error] get_hot_topics: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/topics/<int:topic_id>/news', methods=['GET'])
+def get_topic_news(topic_id):
+    """
+    获取指定话题下的所有新闻
+    用于点击热点话题后展示相关新闻
+    """
+    try:
+        max_results = request.args.get('limit', 20, type=int)
+        
+        with engine.connect() as conn:
+            # 查询话题信息
+            topic_result = conn.execute(text("""
+                SELECT topic_name, topic_keywords, news_count
+                FROM hot_topics
+                WHERE topic_id = :topic_id
+            """), {'topic_id': topic_id})
+            
+            topic_row = topic_result.fetchone()
+            if not topic_row:
+                return jsonify({"error": "Topic not found"}), 404
+            
+            topic_info = {
+                'id': topic_id,
+                'name': topic_row[0],
+                'keywords': json.loads(topic_row[1]) if topic_row[1] else [],
+                'count': topic_row[2]
+            }
+            
+            # 查询话题下的新闻
+            result = conn.execute(text("""
+                SELECT 
+                    n.news_id, n.title, n.summary, n.source_url,
+                    n.created_at, n.language, n.has_video,
+                    nc.is_representative,
+                    (SELECT country_code FROM news_countries 
+                     WHERE news_id = n.news_id AND is_primary = 1 LIMIT 1) as country
+                FROM news n
+                JOIN news_topics nt ON n.news_id = nt.news_id
+                WHERE nt.topic_id = :topic_id
+                ORDER BY nt.is_representative DESC, n.created_at DESC
+                LIMIT :limit
+            """), {'topic_id': topic_id, 'limit': max_results})
+            
+            news_list = []
+            for row in result.fetchall():
+                news_list.append({
+                    'id': row[0],
+                    'title': row[1],
+                    'summary': row[2][:200] + '...' if row[2] and len(row[2]) > 200 else (row[2] or ''),
+                    'source_url': row[3],
+                    'time': row[4].isoformat() if row[4] else '',
+                    'language': row[5],
+                    'has_video': bool(row[6]),
+                    'is_representative': bool(row[7]),
+                    'country': row[8] or ''
+                })
+            
+            return jsonify({
+                'topic': topic_info,
+                'news': news_list
+            })
+    except Exception as e:
+        print(f"[API Error] get_topic_news: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================
+# 话题聚类相关函数（内聚到API模块）
+# ============================================
+
+def extract_keywords_simple(text_content, language='zh'):
+    """从文本中提取关键词（简化版）"""
+    if not text_content:
+        return set()
+    
+    text_content = re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9\s]', ' ', text_content)
+    keywords = set()
+    
+    if language == 'zh':
+        words = text_content.split()
+        for word in words:
+            word = word.strip()
+            if 2 <= len(word) <= 8 and word not in STOP_WORDS and not word.isdigit():
+                keywords.add(word)
+    else:
+        words = text_content.lower().split()
+        for word in words:
+            word = word.strip()
+            if len(word) >= 3 and word not in STOP_WORDS and word.isalpha():
+                keywords.add(word)
+    
+    return keywords
+
+def jaccard_similarity(set1, set2):
+    """计算Jaccard相似度"""
+    if not set1 or not set2:
+        return 0.0
+    intersection = len(set1 & set2)
+    union = len(set1 | set2)
+    return intersection / union if union > 0 else 0.0
+
+def cluster_news_for_topics(news_list, similarity_threshold=0.12):
+    """
+    基于Jaccard相似度对新闻进行聚类
+    返回话题列表
+    """
+    if not news_list or len(news_list) < 2:
+        return []
+    
+    # 提取每篇新闻的关键词
+    news_keywords = {}
+    for news_id, title, content, language in news_list:
+        text_content = f"{title} {content[:200]}"
+        keywords = extract_keywords_simple(text_content, language)
+        news_keywords[news_id] = {'id': news_id, 'title': title, 'keywords': keywords}
+    
+    # 聚类
+    clusters = []
+    processed = set()
+    
+    for news_id in news_keywords:
+        if news_id in processed:
+            continue
+        
+        # 创建新簇
+        cluster = [news_id]
+        processed.add(news_id)
+        news_data = news_keywords[news_id]
+        
+        # 查找相似新闻
+        for other_id in news_keywords:
+            if other_id in processed:
+                continue
+            other_data = news_keywords[other_id]
+            sim = jaccard_similarity(news_data['keywords'], other_data['keywords'])
+            
+            if sim >= similarity_threshold:
+                cluster.append(other_id)
+                processed.add(other_id)
+        
+        if len(cluster) >= 1:  # 单篇也作为话题
+            clusters.append(cluster)
+    
+    # 生成话题信息
+    topics = []
+    for cluster in clusters:
+        # 统计关键词频率
+        keyword_freq = defaultdict(int)
+        for news_id in cluster:
+            for kw in news_keywords[news_id]['keywords']:
+                keyword_freq[kw] += 1
+        
+        # 取Top5关键词
+        top_keywords = sorted(keyword_freq.items(), key=lambda x: x[1], reverse=True)[:5]
+        topic_keywords = [kw for kw, _ in top_keywords]
+        
+        # 生成话题名
+        if topic_keywords:
+            topic_name = f"{topic_keywords[0]}·{topic_keywords[1]}" if len(topic_keywords) >= 2 else topic_keywords[0]
+        else:
+            rep_title = news_keywords[cluster[0]]['title'][:15]
+            topic_name = rep_title + "..." if len(news_keywords[cluster[0]]['title']) > 15 else rep_title
+        
+        topics.append({
+            'name': topic_name,
+            'keywords': topic_keywords,
+            'news_ids': cluster,
+            'news_count': len(cluster),
+            'representative_id': cluster[0]
+        })
+    
+    topics.sort(key=lambda x: x['news_count'], reverse=True)
+    return topics
+
+def update_hot_topics_internal():
+    """内部函数：更新热点话题到数据库"""
+    print(f"[{datetime.now()}] 开始更新热点话题...")
+    
+    with engine.connect() as conn:
+        # 获取48小时内的新闻
+        result = conn.execute(text("""
+            SELECT news_id, title, content, language
+            FROM news
+            WHERE created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR)
+            ORDER BY created_at DESC
+        """))
+        
+        news_list = [(row[0], row[1], row[2] or '', row[3] or 'zh') for row in result.fetchall()]
+        
+        if len(news_list) < 2:
+            print(f"新闻数量不足({len(news_list)}篇)，跳过聚类")
+            return 0
+        
+        print(f"获取到 {len(news_list)} 篇新闻，开始聚类...")
+        
+        # 聚类
+        topics = cluster_news_for_topics(news_list, similarity_threshold=0.12)
+        
+        if not topics:
+            print("聚类结果为空")
+            return 0
+        
+        print(f"聚类完成，生成 {len(topics)} 个话题")
+        
+        # 清空旧话题
+        conn.execute(text("""
+            DELETE nt FROM news_topics nt
+            JOIN hot_topics ht ON nt.topic_id = ht.topic_id
+            WHERE ht.is_active = TRUE
+        """))
+        conn.execute(text("DELETE FROM hot_topics WHERE is_active = TRUE"))
+        
+        # 插入新话题
+        inserted_count = 0
+        for topic in topics[:15]:  # Top15
+            news_times = []
+            for nid in topic['news_ids']:
+                for n in news_list:
+                    if n[0] == nid:
+                        news_times.append(datetime.now())  # 简化处理
+                        break
+            
+            first_time = min(news_times) if news_times else datetime.now()
+            last_time = max(news_times) if news_times else datetime.now()
+            
+            result = conn.execute(text("""
+                INSERT INTO hot_topics 
+                (topic_name, topic_keywords, news_count, first_news_time, last_news_time, is_active)
+                VALUES (:name, :keywords, :count, :first_time, :last_time, TRUE)
+            """), {
+                'name': topic['name'][:200],
+                'keywords': json.dumps(topic['keywords'], ensure_ascii=False),
+                'count': topic['news_count'],
+                'first_time': first_time,
+                'last_time': last_time
+            })
+            
+            topic_id = conn.execute(text("SELECT LAST_INSERT_ID()")).scalar()
+            
+            # 插入关联
+            for news_id in topic['news_ids']:
+                is_rep = (news_id == topic['representative_id'])
+                conn.execute(text("""
+                    INSERT INTO news_topics (news_id, topic_id, similarity_score, is_representative)
+                    VALUES (:news_id, :topic_id, 1.0, :is_rep)
+                """), {'news_id': news_id, 'topic_id': topic_id, 'is_rep': is_rep})
+            
+            inserted_count += 1
+        
+        conn.commit()
+        print(f"话题更新完成，共 {inserted_count} 个话题")
+        return inserted_count
 
 
 # 来源类型到颜色的映射

@@ -44,7 +44,7 @@ class NewsFetcher:
     def _fetch_full_page_content(self, url):
         """从源URL抓取详情页全文（仅清洗HTML，不做长度判断）"""
         try:
-            resp = self.session.get(url, timeout=12)
+            resp = self.session.get(url, timeout=(10, 20))
             resp.raise_for_status()
             resp.encoding = resp.encoding or 'utf-8'
             html = resp.text
@@ -97,7 +97,7 @@ class NewsFetcher:
             label = f"{category}" if mode == 'category' else f"country:{country}"
             print(f"[NewsAPI] 请求 [{mode}]: {label}")
 
-            response = self.session.get(url, params=params, timeout=10)
+            response = self.session.get(url, params=params, timeout=(8, 15))
             response.raise_for_status()
             data = response.json()
 
@@ -190,7 +190,7 @@ class NewsFetcher:
         
             response = self.session.get(
                 source_config['url'], 
-                timeout=15,
+                timeout=(10, 20),
                 headers={'Accept': 'application/rss+xml, application/xml, text/xml, */*'}
             )
             response.raise_for_status()
