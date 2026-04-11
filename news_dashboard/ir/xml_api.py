@@ -958,6 +958,7 @@ def cluster_news_for_topics(news_list, similarity_threshold=0.15):
     返回话题列表
     """
     if not news_list or len(news_list) < 2:
+        print(f"[Cluster] 新闻数量不足({len(news_list)}篇)，跳过聚类")
         return []
     
     # 提取每篇新闻的关键词（增加内容长度以获得更多关键词）
@@ -966,6 +967,9 @@ def cluster_news_for_topics(news_list, similarity_threshold=0.15):
         text_content = f"{title} {content[:500]}"  # 增加内容长度到500字
         keywords = extract_keywords_simple(text_content, language)
         news_keywords[news_id] = {'id': news_id, 'title': title, 'keywords': keywords}
+    
+    avg_kw = sum(len(v['keywords']) for v in news_keywords.values()) / len(news_keywords)
+    print(f"[Cluster] 提取关键词完成，平均每篇 {avg_kw:.1f} 个关键词")
     
     # 辅助函数：计算高质量共享词数量（排除长度<3的英文词和常见垃圾词）
     def _quality_shared(kw_set1, kw_set2):
@@ -1014,6 +1018,10 @@ def cluster_news_for_topics(news_list, similarity_threshold=0.15):
         
         if len(cluster) >= 1:
             clusters.append(cluster)
+    
+    print(f"[Cluster] 原始聚类完成，共 {len(clusters)} 个簇")
+    for i, c in enumerate(clusters[:5]):
+        print(f"[Cluster]  簇{i+1}: {len(c)} 篇新闻")
     
     # 生成话题信息
     topics = []
@@ -1073,17 +1081,22 @@ def cluster_news_for_topics(news_list, similarity_threshold=0.15):
         
         # 话题质量检查：如果无法生成有效话题名，丢弃该簇
         if not topic_name:
+            print(f"[Topics] 丢弃簇（无法生成话题名）：{news_keywords[cluster[0]]['title'][:30]}...")
             continue
         # 如果话题名只包含数字、标点或长度<3，丢弃
         if len(re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9]', '', topic_name)) < 3:
+            print(f"[Topics] 丢弃簇（话题名过短）：'{topic_name}'")
             continue
         # 如果话题名匹配明显的UI垃圾模式，丢弃
         if re.search(r'(share|saveclick|homepage|posts|secondsplay|seconds|play)', topic_name, re.IGNORECASE):
+            print(f"[Topics] 丢弃簇（包含UI垃圾词）：'{topic_name}'")
             continue
-        # 如果高质量关键词过少（且簇小），可能是噪声
-        if len(good_keywords) < 2 and len(cluster) < 3:
+        # 如果高质量关键词过少（且簇只有1条新闻），可能是噪声
+        if len(good_keywords) < 2 and len(cluster) < 2:
+            print(f"[Topics] 丢弃低质量簇（仅{len(cluster)}条新闻，高质量词{len(good_keywords)}个）：'{topic_name}'")
             continue
         
+        print(f"[Topics] 生成话题：'{topic_name}'（{len(cluster)}篇新闻）")
         topics.append({
             'name': topic_name,
             'keywords': topic_keywords,
@@ -1116,8 +1129,8 @@ def update_hot_topics_internal():
         
         print(f"获取到 {len(news_list)} 篇新闻，开始聚类...")
         
-        # 聚类（使用优化后的阈值0.08）
-        topics = cluster_news_for_topics(news_list, similarity_threshold=0.08)
+        # 聚类（使用函数默认阈值0.15）
+        topics = cluster_news_for_topics(news_list)
         
         if not topics:
             print("聚类结果为空")

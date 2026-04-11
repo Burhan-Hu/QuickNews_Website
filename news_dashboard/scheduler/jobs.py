@@ -125,14 +125,16 @@ class NewsScheduler:
         if total_saved > 0:
             print("[Job] 开始更新热点话题...")
             try:
-                # 导入并执行聚类（使用相对导入）
-                import sys
-                sys.path.insert(0, 'D:/qknews/news_dashboard')
+                # 导入并执行聚类（使用动态路径兼容Linux/Windows）
+                import sys, os
+                sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
                 from ir.xml_api import update_hot_topics_internal
                 topic_count = update_hot_topics_internal()
                 print(f"[Job] 热点话题更新完成，共{topic_count}个话题")
             except Exception as e:
                 print(f"[Job] 热点话题更新失败: {e}")
+                import traceback
+                traceback.print_exc()
         
         # 强制垃圾回收，缓解内存泄漏
         import gc

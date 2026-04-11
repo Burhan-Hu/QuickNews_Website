@@ -82,6 +82,7 @@ def main():
         # 立即执行一次HTML源抓取
         print("\n[Init] 执行HTML网站抓取...")
         html_articles = scheduler.fetcher.fetch_all_html_sources()
+        html_saved = 0
         if html_articles:
             processed = [scheduler.processor.process_article(a) for a in html_articles]
             processed = [a for a in processed if a is not None]
@@ -89,6 +90,23 @@ def main():
             print(f"[Init] HTML源保存: 成功{success}条, 跳过{failed}条")
             scheduler.stats['articles_fetched'] += len(html_articles)
             scheduler.stats['articles_saved'] += success
+            html_saved = success
+        
+        # 【修复】首次启动结束后立即更新热点话题
+        total_init_saved = scheduler.stats['articles_saved']
+        if total_init_saved > 0:
+            print("\n[Init] 开始更新热点话题...")
+            try:
+                sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+                from ir.xml_api import update_hot_topics_internal
+                topic_count = update_hot_topics_internal()
+                print(f"[Init] 热点话题更新完成，共{topic_count}个话题")
+            except Exception as e:
+                print(f"[Init] 热点话题更新失败: {e}")
+                import traceback
+                traceback.print_exc()
+        else:
+            print("\n[Init] 首次未保存任何新闻，跳过热点话题更新")
         
         print("\n[Running] 系统运行中...")
         print("  - 抓取+XML索引: 每20分钟")
