@@ -1201,6 +1201,7 @@ proc_main: BEGIN
     IF v_full_text LIKE '%征兵%' THEN SET @cnt_military = @cnt_military + 1; END IF;
     IF v_full_text LIKE '%军事基地%' THEN SET @cnt_military = @cnt_military + 1; END IF;
     IF v_full_text LIKE '%军队%' THEN SET @cnt_military = @cnt_military + 1; END IF;
+    IF v_full_text LIKE '%attack%' THEN SET @cnt_military = @cnt_military + 1; END IF;
 
     -- 7. 体育类关键词计数
     IF v_full_text LIKE '%体育%' THEN SET @cnt_sports = @cnt_sports + 1; END IF;

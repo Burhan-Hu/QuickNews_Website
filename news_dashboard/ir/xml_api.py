@@ -14,6 +14,25 @@ from datetime import datetime, timedelta
 # 停用词（用于话题聚类）
 STOP_WORDS = {'的', '了', '在', '是', '我', '有', '和', '就', '不', '人', '都', '一', '一个', '上', '也', '很', '到', '说', '要', '去', '你', '会', '着', '没有', '看', '好', '自己', '这', '那', '这些', '那些', '这个', '那个', '之', '与', '及', '或', '但', '而', '然而', '因为', '所以', '因此', '如果', '即使', '虽然', '尽管', '如此', '便', '由', '被', '把', '给', '让', '向', '往', '自', '从', '到', '关于', '对于', '为了', '为着', '除', '除了', '除去', 'the', 'be', 'to', 'of', 'and', 'a', 'in', 'that', 'have', 'i', 'it', 'for', 'not', 'on', 'with', 'he', 'as', 'you', 'do', 'at', 'this', 'but', 'his', 'by', 'from', 'they', 'we', 'say', 'her', 'she', 'or', 'an', 'will', 'my', 'one', 'all', 'would', 'there', 'their', 'what', 'so', 'up', 'out', 'if', 'about', 'who', 'get', 'which', 'go', 'me', 'when', 'make', 'can', 'like', 'time', 'no', 'just', 'him', 'know', 'take', 'people', 'into', 'year', 'your', 'good', 'some', 'could', 'them', 'see', 'other', 'than', 'then', 'now', 'look', 'only', 'come', 'its', 'over', 'think', 'also', 'back', 'after', 'use', 'two', 'how', 'our', 'work', 'first', 'well', 'way', 'even', 'new', 'want', 'because', 'any', 'these', 'give', 'day', 'most', 'us', 'is', 'was', 'are', 'were', 'been', 'has', 'had', 'did', 'does'}
 
+# 垃圾词汇过滤（HTML元素、UI按钮、网站模板等）
+JUNK_WORDS = {
+    # HTML/UI元素
+    'saveclick', 'share', 'click', 'button', 'btn', 'link', 'href', 'class', 'id', 'div', 'span',
+    'homepage', 'posts', 'post', 'page', 'nav', 'menu', 'sidebar', 'footer', 'header', 'main',
+    'secondsplay', 'video', 'audio', 'image', 'img', 'svg', 'icon', 'logo', 'banner',
+    # 网站功能词汇
+    'subscribe', 'follow', 'login', 'signin', 'register', 'comment', 'reply', 'share', 'like',
+    'download', 'upload', 'search', 'more', 'read', 'view', 'click', 'tap', 'swipe',
+    # 时间格式
+    'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december',
+    'jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec',
+    'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
+    'today', 'yesterday', 'tomorrow', 'day', 'week', 'month', 'year',
+    # 常见无意义组合
+    'artemis', 'earth', 'minister', 'talks', 'said', 'says', 'report', 'reports', 'according',
+    'ap', 'reuters', 'afp', 'bbc', 'cnn', 'fox', 'news', 'breaking', 'update', 'live'
+}
+
 try:
     import jieba
     _JIEBA_AVAILABLE = True
@@ -812,25 +831,55 @@ def get_topic_news(topic_id):
 # ============================================
 
 def extract_keywords_simple(text_content, language='zh'):
-    """从文本中提取关键词（简化版）"""
+    """
+    从文本中提取关键词（增强版）
+    - 过滤HTML标签和脚本
+    - 过滤UI元素和常见垃圾词汇
+    - 过滤停用词
+    """
     if not text_content:
         return set()
     
+    # 1. 移除HTML标签和脚本内容
+    text_content = re.sub(r'<script[^>]*>.*?</script>', ' ', text_content, flags=re.DOTALL | re.IGNORECASE)
+    text_content = re.sub(r'<style[^>]*>.*?</style>', ' ', text_content, flags=re.DOTALL | re.IGNORECASE)
+    text_content = re.sub(r'<[^>]+>', ' ', text_content)  # 移除所有HTML标签
+    
+    # 2. 只保留中文、英文、数字
     text_content = re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9\s]', ' ', text_content)
+    
     keywords = set()
     
     if language == 'zh':
         words = text_content.split()
         for word in words:
-            word = word.strip()
-            if 2 <= len(word) <= 8 and word not in STOP_WORDS and not word.isdigit():
-                keywords.add(word)
+            word = word.strip().lower()
+            # 过滤条件
+            if not (2 <= len(word) <= 12):  # 长度限制
+                continue
+            if word.isdigit():  # 纯数字
+                continue
+            if word in STOP_WORDS:  # 停用词
+                continue
+            if word in JUNK_WORDS:  # 垃圾词汇
+                continue
+            if re.match(r'^\d+年$|^\d+月$|^\d+日$', word):  # 日期格式
+                continue
+            keywords.add(word)
     else:
         words = text_content.lower().split()
         for word in words:
             word = word.strip()
-            if len(word) >= 3 and word not in STOP_WORDS and word.isalpha():
-                keywords.add(word)
+            # 过滤条件
+            if len(word) < 3 or len(word) > 15:  # 长度限制
+                continue
+            if not word.isalpha():  # 非纯字母（过滤数字混合）
+                continue
+            if word in STOP_WORDS:  # 停用词
+                continue
+            if word in JUNK_WORDS:  # 垃圾词汇
+                continue
+            keywords.add(word)
     
     return keywords
 
@@ -842,22 +891,24 @@ def jaccard_similarity(set1, set2):
     union = len(set1 | set2)
     return intersection / union if union > 0 else 0.0
 
-def cluster_news_for_topics(news_list, similarity_threshold=0.12):
+def cluster_news_for_topics(news_list, similarity_threshold=0.08):
     """
-    基于Jaccard相似度对新闻进行聚类
+    基于Jaccard相似度对新闻进行聚类（优化版）
+    - 降低阈值让更多相关新闻聚到一起
+    - 使用关键词数量作为辅助判断
     返回话题列表
     """
     if not news_list or len(news_list) < 2:
         return []
     
-    # 提取每篇新闻的关键词
+    # 提取每篇新闻的关键词（增加内容长度以获得更多关键词）
     news_keywords = {}
     for news_id, title, content, language in news_list:
-        text_content = f"{title} {content[:200]}"
+        text_content = f"{title} {content[:500]}"  # 增加内容长度到500字
         keywords = extract_keywords_simple(text_content, language)
         news_keywords[news_id] = {'id': news_id, 'title': title, 'keywords': keywords}
     
-    # 聚类
+    # 聚类：使用更宽松的策略
     clusters = []
     processed = set()
     
@@ -870,18 +921,29 @@ def cluster_news_for_topics(news_list, similarity_threshold=0.12):
         processed.add(news_id)
         news_data = news_keywords[news_id]
         
-        # 查找相似新闻
+        # 查找相似新闻（与簇内任一成员相似即可加入）
         for other_id in news_keywords:
             if other_id in processed:
                 continue
             other_data = news_keywords[other_id]
-            sim = jaccard_similarity(news_data['keywords'], other_data['keywords'])
             
-            if sim >= similarity_threshold:
+            # 计算与簇内所有成员的相似度，取最大值
+            max_sim = 0
+            for member_id in cluster:
+                member_data = news_keywords[member_id]
+                sim = jaccard_similarity(member_data['keywords'], other_data['keywords'])
+                max_sim = max(max_sim, sim)
+            
+            # 或使用共享关键词数量判断（至少2个共享词）
+            shared_keywords = news_data['keywords'] & other_data['keywords']
+            shared_count = len(shared_keywords)
+            
+            # 满足任一条件即加入
+            if max_sim >= similarity_threshold or shared_count >= 2:
                 cluster.append(other_id)
                 processed.add(other_id)
         
-        if len(cluster) >= 1:  # 单篇也作为话题
+        if len(cluster) >= 1:
             clusters.append(cluster)
     
     # 生成话题信息
@@ -897,12 +959,41 @@ def cluster_news_for_topics(news_list, similarity_threshold=0.12):
         top_keywords = sorted(keyword_freq.items(), key=lambda x: x[1], reverse=True)[:5]
         topic_keywords = [kw for kw, _ in top_keywords]
         
-        # 生成话题名
-        if topic_keywords:
-            topic_name = f"{topic_keywords[0]}·{topic_keywords[1]}" if len(topic_keywords) >= 2 else topic_keywords[0]
-        else:
-            rep_title = news_keywords[cluster[0]]['title'][:15]
-            topic_name = rep_title + "..." if len(news_keywords[cluster[0]]['title']) > 15 else rep_title
+        # 生成话题名（优先使用代表新闻的标题核心词）
+        rep_title = news_keywords[cluster[0]]['title']
+        
+        # 策略1：如果标题中有高权重关键词，提取标题核心作为话题名
+        topic_name = None
+        if rep_title:
+            # 提取标题中的核心部分（去除来源等后缀）
+            title_clean = rep_title
+            # 去除常见的来源前缀/后缀（如"新华社：xxx"、"xxx_凤凰网"）
+            title_clean = re.sub(r'^[\u4e00-\u9fa5]{2,5}[：:|]', '', title_clean)  # 来源前缀
+            title_clean = re.sub(r'[_|｜][\u4e00-\u9fa5a-zA-Z]+$', '', title_clean)  # 来源后缀
+            title_clean = title_clean.strip()
+            
+            if len(title_clean) >= 8:
+                # 取标题前15字作为话题名
+                topic_name = title_clean[:15] + "..." if len(title_clean) > 15 else title_clean
+        
+        # 策略2：如果策略1失败，使用关键词组合（但要求关键词质量）
+        if not topic_name and topic_keywords:
+            # 过滤掉可能是人名的关键词（避免"eric-swalwell"这种）
+            filtered_keywords = []
+            for kw in topic_keywords[:3]:
+                # 过滤：纯小写且较长的词可能是人名/无意义词
+                if len(kw) > 10 and kw.islower():
+                    continue
+                filtered_keywords.append(kw)
+            
+            if len(filtered_keywords) >= 2:
+                topic_name = f"{filtered_keywords[0]}·{filtered_keywords[1]}"
+            elif filtered_keywords:
+                topic_name = filtered_keywords[0]
+        
+        # 策略3：兜底，使用原标题
+        if not topic_name:
+            topic_name = rep_title[:20] + "..." if len(rep_title) > 20 else rep_title
         
         topics.append({
             'name': topic_name,
@@ -936,8 +1027,8 @@ def update_hot_topics_internal():
         
         print(f"获取到 {len(news_list)} 篇新闻，开始聚类...")
         
-        # 聚类
-        topics = cluster_news_for_topics(news_list, similarity_threshold=0.12)
+        # 聚类（使用优化后的阈值0.08）
+        topics = cluster_news_for_topics(news_list, similarity_threshold=0.08)
         
         if not topics:
             print("聚类结果为空")
@@ -991,6 +1082,21 @@ def update_hot_topics_internal():
             inserted_count += 1
         
         conn.commit()
+        
+        # 验证数据一致性
+        verify_result = conn.execute(text("""
+            SELECT ht.topic_id, ht.news_count, COUNT(nt.news_id) as actual_count
+            FROM hot_topics ht
+            LEFT JOIN news_topics nt ON ht.topic_id = nt.topic_id
+            WHERE ht.is_active = TRUE
+            GROUP BY ht.topic_id
+            HAVING ht.news_count != COUNT(nt.news_id)
+        """))
+        inconsistent = verify_result.fetchall()
+        if inconsistent:
+            for row in inconsistent:
+                print(f"[Warning] 话题{row[0]}数量不一致: 记录{row[1]} vs 实际{row[2]}")
+        
         print(f"话题更新完成，共 {inserted_count} 个话题")
         return inserted_count
 
