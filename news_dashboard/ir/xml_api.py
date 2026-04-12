@@ -150,7 +150,7 @@ class XMLSearchEngine:
                 # 计数
                 count_sql = f"""
                     SELECT COUNT(*) FROM news 
-                    WHERE {where_clause} AND is_active = TRUE
+                    WHERE {where_clause}
                 """
                 total = conn.execute(text(count_sql), params).scalar() or 0
                 
@@ -171,7 +171,7 @@ class XMLSearchEngine:
                         (SELECT country_code FROM news_countries 
                          WHERE news_id = n.news_id AND is_primary = 1 LIMIT 1) as country
                     FROM news n
-                    WHERE {where_clause} AND n.is_active = TRUE
+                    WHERE {where_clause}
                     ORDER BY {order_clause}
                     LIMIT :limit OFFSET :offset
                 """
@@ -353,306 +353,228 @@ def extract_keywords_simple(text_content, language='zh'):
     
     return keywords
 
-def jaccard_similarity(set1, set2):
-    """计算Jaccard相似度"""
-    if not set1 or not set2:
-        return 0.0
-    intersection = len(set1 & set2)
-    union = len(set1 | set2)
-    return intersection / union if union > 0 else 0.0
+def _lcs_length(a, b):
+    """最长公共连续子串长度"""
+    m, n = len(a), len(b)
+    if m == 0 or n == 0:
+        return 0
+    max_len = 0
+    dp = [0] * (n + 1)
+    for i in range(1, m + 1):
+        prev = 0
+        for j in range(1, n + 1):
+            temp = dp[j]
+            if a[i-1] == b[j-1]:
+                dp[j] = prev + 1
+                if dp[j] > max_len:
+                    max_len = dp[j]
+            else:
+                dp[j] = 0
+            prev = temp
+    return max_len
 
-def cluster_news_for_topics(news_list, similarity_threshold=0.35):
+def extract_hot_topics(news_list):
     """
-    基于TF-IDF+余弦相似度的密度种子 + 两阶段簇中心聚类（严格版）
-    - 标题关键词加权，通用实体词权重减半
-    - 方法4：基于局部密度筛选簇种子，防止通用综述文当种子
-    - 方法3：两阶段聚类（硬核高阈值聚核心 + 软边低阈值分配边缘）
-    - 话题名基于词语共现，避免数学平均导致的拼凑
-    - 反向硬校验：每篇关联新闻必须包含话题核心词的至少2个
+    基于标题事件短语提取的热点话题生成（改进版）
+    - jieba词性标注约束，只保留包含命名实体的事件级短语
+    - TF-IDF加权过滤通用词组合
+    - 关联新闻 = 标题精确包含该短语的最近新闻
     返回话题列表（结构与旧版保持一致）
     """
     import math
     from collections import Counter
     
     if not news_list or len(news_list) < 2:
-        print(f"[Cluster] 新闻数量不足({len(news_list)}篇)，跳过聚类")
         return []
     
-    TITLE_WEIGHT = 3
-    HARD_THRESHOLD = 0.45      # 第一阶段：硬核聚类阈值
-    SOFT_THRESHOLD = 0.30      # 第二阶段：边缘分配阈值
-    DENSITY_THRESHOLD = 0.40   # 邻居密度计算阈值
-    MIN_DENSITY = 3            # 成为种子的最小邻居数
+    # 扩展通用动词/无意义词集合（用于中文过滤）
+    common_verbs = COMMON_ENTITY_WORDS | {
+        '发展', '推动', '促进', '加强', '推进', '提高', '提升', '增强', '扩大',
+        '深化', '完善', '落实', '实现', '确保', '坚持', '维护', '保障', '服务',
+        '管理', '监督', '检查', '调查', '研究', '分析', '总结', '说明', '宣布',
+        '发布', '签署', '达成', '举行', '召开', '访问', '会见', '会谈', '协商',
+        '合作', '交流', '互动', '联系', '沟通', '协调', '配合', '支持', '帮助',
+        '协助', '参与', '参加', '加入', '入选', '荣获', '获得', '取得', '完成',
+        '结束', '启动', '开幕', '闭幕', '举办', '开展', '组织', '策划', '实施',
+        '执行', '制定', '修订', '修改', '调整', '改革', '创新', '探索', '尝试',
+        '努力', '奋斗', '争取', '期待', '希望', '成为', '需要', '可以', '没有',
+        '随着', '根据', '由于', '但是', '并且', '同时', '其中', '其他', '相关',
+        '实施', '计划', '回应', '声明', '报道', '称', '说', '谈', '访问', '谈判',
+        '会议', '活动', '工作', '问题', '情况', '方面', '建设', '开始', '已经',
+        '正在', '继续', '持续', '保持', '发生', '出现', '达到', '超过', '接近',
+        '进入', '退出', '返回', '到达', '离开', '前往', '参观', '视察', '检阅',
+        '会晤', '商谈', '商讨', '协定', '协议', '条约', '合同', '签订', '缔结',
+        '赢得', '博得', '落得', '处理', '处置', '办理', '承办', '经办', '主办',
+        '操办', '筹办', '兴办', '复办', '停办', '撤办', '创建', '创办', '创立',
+        '建立', '树立', '设立', '设置', '开设', '开办', '撤销', '取消', '废除',
+        '废止', '停止', '终止', '中止', '暂停', '中断', '间断', '连续', '陆续',
+        '延续', '延长', '延展', '延伸', '蔓延', '延续', '沿袭', '因袭', '承袭',
+        '世袭', '传袭', '抄袭', '剽袭', '侵袭', '袭击', '偷袭', '突袭', '奇袭',
+        '空袭', '夜袭', '袭扰', '袭取', '袭占', '袭来', '逆袭', '反袭', '回击',
+        '还击', '反击', '反攻', '反扑', '反制', '反抗', '反对', '反驳', '反诘',
+        '反问', '反诉', '反告', '反咬', '反噬', '反馈', '反应', '反映', '反响',
+        '回答', '答复', '回复', '批复', '批答', '答批', '核批', '审批', '报批',
+        '呈批', '转批', '加批', '眉批', '旁批', '朱批', '总批', '点评', '评论',
+        '议论', '讨论', '谈论', '研讨', '研判', '深究', '探究', '侦察', '侦查',
+        '勘察', '勘测', '勘探', '勘查', '踏勘', '校勘', '推勘', '查勘', '勘误',
+        '勘正', '校正', '校对', '校核', '核算', '计算', '累计', '总计', '合计',
+        '共计', '约计', '算计', '盘算', '筹算', '测算', '推算', '演算', '验算',
+        '审计', '稽核', '考核', '考查', '考察', '检验', '检测', '检疫', '查验',
+        '查收', '查访', '查询', '查究', '查抄', '查封', '查扣', '查禁', '查处',
+        '查办', '查缉', '查核', '审查', '核查', '稽查', '缉查', '探查', '测查',
+        '普查', '巡查', '抽查', '排查', '彻查', '严查', '清查', '盘查', '纠查',
+        '访查', '侦', '察', '观', '看', '望', '瞧', '视', '盯', '瞄', '瞥',
+        '瞅', '瞪', '睹', '窥', '凝视', '注视', '审视', '重视', '轻视', '忽视',
+        '漠视', '无视', '蔑视', '藐视', '小视', '鄙视', '歧视', '敌视', '仇视',
+    }
     
-    def _is_good_kw(kw):
-        if kw in JUNK_WORDS or kw in ZH_JUNK_WORDS or _is_zh_junk(kw) or kw in COMMON_ENTITY_WORDS:
+    def _is_valid_phrase(words, flags):
+        """验证短语的词性是否构成有效事件"""
+        # 必须至少包含1个命名实体
+        has_entity = any(f.startswith(('nr', 'ns', 'nt', 'nz', 'j')) for f in flags)
+        if not has_entity:
             return False
-        if re.match(r'^[a-z]+$', kw) and len(kw) < 4:
+        # 通用动词不能超过1个
+        verb_count = sum(1 for w, f in zip(words, flags) if w in common_verbs or f.startswith('v'))
+        if verb_count > 1:
+            return False
+        # 不能全是虚词/形容词/副词/数词/量词
+        content_count = sum(1 for f in flags if not f.startswith(('d', 'p', 'c', 'u', 'e', 'y', 'o', 'm', 'q', 'a')))
+        if content_count < 1:
             return False
         return True
     
-    # 分别提取标题和正文关键词，构建带权TF向量（通用实体词权重减半）
-    news_keywords = {}
-    all_words = set()
+    # 收集候选短语
+    phrase_data = {}  # phrase -> {'news_ids': set, 'count': int}
+    all_words = Counter()
     
     for news_id, title, content, language in news_list:
-        title_kws = extract_keywords_simple(title, language)
-        content_kws = extract_keywords_simple(content[:500], language)
-        
-        tf = Counter()
-        for w in title_kws:
-            weight = TITLE_WEIGHT * 0.5 if w in COMMON_ENTITY_WORDS else TITLE_WEIGHT
-            tf[w] += weight
-        for w in content_kws:
-            weight = 0.5 if w in COMMON_ENTITY_WORDS else 1
-            tf[w] += weight
-        
-        keywords_set = set(tf.keys())
-        all_words.update(keywords_set)
-        news_keywords[news_id] = {
-            'id': news_id,
-            'title': title,
-            'keywords': keywords_set,
-            'tf': tf
-        }
-    
-    avg_kw = sum(len(v['keywords']) for v in news_keywords.values()) / len(news_keywords)
-    print(f"[Cluster] 提取关键词完成，平均每篇 {avg_kw:.1f} 个关键词")
-    
-    # 计算全局IDF
-    N = len(news_keywords)
-    idf = {}
-    for word in all_words:
-        df = sum(1 for data in news_keywords.values() if word in data['tf'])
-        idf[word] = math.log(N / (df + 1)) + 1.0
-    
-    # 构建TF-IDF向量
-    vectors = {}
-    for news_id, data in news_keywords.items():
-        vec = {w: count * idf.get(w, 1.0) for w, count in data['tf'].items()}
-        vectors[news_id] = vec
-    
-    def _cosine_sim(vec1, vec2):
-        keys = set(vec1.keys()) | set(vec2.keys())
-        dot = sum(vec1.get(k, 0) * vec2.get(k, 0) for k in keys)
-        norm1 = sum(v ** 2 for v in vec1.values()) ** 0.5
-        norm2 = sum(v ** 2 for v in vec2.values()) ** 0.5
-        if norm1 == 0 or norm2 == 0:
-            return 0.0
-        return dot / (norm1 * norm2)
-    
-    def _cluster_center(cluster_members):
-        center = Counter()
-        for mid in cluster_members:
-            for w, v in vectors[mid].items():
-                center[w] += v
-        norm = sum(v ** 2 for v in center.values()) ** 0.5
-        if norm > 0:
-            center = {w: v / norm for w, v in center.items()}
-        return center
-    
-    def _quality_shared(kw_set1, kw_set2):
-        shared = kw_set1 & kw_set2
-        count = 0
-        for w in shared:
-            if w in JUNK_WORDS or w in ZH_JUNK_WORDS or _is_zh_junk(w) or w in COMMON_ENTITY_WORDS:
-                continue
-            if re.match(r'^[a-z]+$', w) and len(w) < 4:
-                continue
-            count += 1
-        return count
-    
-    # ===== 方法4：计算局部密度，筛选高质量种子 =====
-    for news_id in news_keywords:
-        density = 0
-        for other_id in news_keywords:
-            if other_id == news_id:
-                continue
-            if _cosine_sim(vectors[news_id], vectors[other_id]) >= DENSITY_THRESHOLD:
-                density += 1
-        news_keywords[news_id]['density'] = density
-    
-    sorted_by_density = sorted(news_keywords.keys(), key=lambda x: news_keywords[x]['density'], reverse=True)
-    seeds = [nid for nid in sorted_by_density if news_keywords[nid]['density'] >= MIN_DENSITY]
-    
-    # 如果种子太少，动态放宽到前30%（至少3个）
-    if len(seeds) < max(3, int(len(sorted_by_density) * 0.3)):
-        seeds = sorted_by_density[:max(3, int(len(sorted_by_density) * 0.3))]
-    
-    non_seeds = [nid for nid in sorted_by_density if nid not in seeds]
-    print(f"[Cluster] 种子筛选完成：{len(seeds)} 个种子，{len(non_seeds)} 个非种子")
-    
-    # ===== 方法3：第一阶段 - 硬核聚类（仅对种子） =====
-    clusters = []
-    processed = set()
-    
-    for seed_id in seeds:
-        if seed_id in processed:
+        if not title:
             continue
         
-        cluster = [seed_id]
-        processed.add(seed_id)
-        
-        for other_id in seeds:
-            if other_id in processed:
-                continue
-            center = _cluster_center(cluster)
-            sim = _cosine_sim(center, vectors[other_id])
-            shared_quality = _quality_shared(news_keywords[seed_id]['keywords'], news_keywords[other_id]['keywords'])
-            
-            if sim >= HARD_THRESHOLD or shared_quality >= 3:
-                cluster.append(other_id)
-                processed.add(other_id)
-        
-        clusters.append(cluster)
-    
-    print(f"[Cluster] 硬核聚类完成，形成 {len(clusters)} 个核心簇")
-    for i, c in enumerate(clusters[:5]):
-        print(f"[Cluster]  核心簇{i+1}: {len(c)} 篇")
-    
-    # ===== 方法3：第二阶段 - 边缘分配（非种子分配到最近的核心簇） =====
-    orphan_news = []
-    for news_id in non_seeds:
-        best_idx = None
-        best_sim = 0
-        for idx, cluster in enumerate(clusters):
-            center = _cluster_center(cluster)
-            sim = _cosine_sim(center, vectors[news_id])
-            if sim > best_sim:
-                best_sim = sim
-                best_idx = idx
-        
-        if best_idx is not None and best_sim >= SOFT_THRESHOLD:
-            clusters[best_idx].append(news_id)
-            processed.add(news_id)
-        else:
-            orphan_news.append(news_id)
-    
-    # 未分配的孤立新闻，不强行合并，各自成单篇簇
-    for nid in orphan_news:
-        clusters.append([nid])
-        processed.add(nid)
-    
-    print(f"[Cluster] 边缘分配完成，{len(non_seeds) - len(orphan_news)} 篇分配成功，{len(orphan_news)} 篇保持独立")
-    
-    # ===== 话题名生成：基于词语共现 =====
-    def _generate_topic_name(cluster):
-        """基于共现频率生成话题名，返回 (topic_name, core_keywords)"""
-        kw_freq = Counter()
-        for nid in cluster:
-            for w in news_keywords[nid]['keywords']:
-                if _is_good_kw(w):
-                    kw_freq[w] += 1
-        
-        good_kws = [w for w, c in kw_freq.most_common(20) if c >= 2]
-        if not good_kws:
-            return None, []
-        
-        # 计算共现矩阵
-        cooccur = Counter()
-        for nid in cluster:
-            article_kws = [w for w in news_keywords[nid]['keywords'] if w in good_kws]
-            for i, w1 in enumerate(article_kws):
-                for w2 in article_kws[i+1:]:
-                    if w1 != w2:
-                        pair = tuple(sorted([w1, w2]))
-                        cooccur[pair] += 1
-        
-        min_cooccur = max(2, int(len(cluster) * 0.3))
-        valid_pairs = [(pair, cnt) for pair, cnt in cooccur.items() if cnt >= min_cooccur]
-        
-        if valid_pairs:
-            valid_pairs.sort(key=lambda x: x[1], reverse=True)
-            w1, w2 = valid_pairs[0][0]
-            core_words = [w1, w2]
-            
-            # 尝试找第三个共现词
-            best_w3 = None
-            best_co = 0
-            for w in good_kws:
-                if w in (w1, w2):
+        if language == 'zh':
+            import jieba.posseg as pseg
+            words_flags = list(pseg.cut(title))
+            # 按停用词/单字/数字分割
+            chunks = []
+            current = []
+            for w, f in words_flags:
+                w = w.strip()
+                if not w or w.isdigit() or len(w) == 1 or w in STOP_WORDS:
+                    if current:
+                        chunks.append(current)
+                        current = []
                     continue
-                cnt1 = sum(1 for nid in cluster if w in news_keywords[nid]['keywords'] and w1 in news_keywords[nid]['keywords'])
-                cnt2 = sum(1 for nid in cluster if w in news_keywords[nid]['keywords'] and w2 in news_keywords[nid]['keywords'])
-                if cnt1 >= min_cooccur and cnt2 >= min_cooccur and cnt1 + cnt2 > best_co:
-                    best_co = cnt1 + cnt2
-                    best_w3 = w
+                current.append((w, f))
+            if current:
+                chunks.append(current)
             
-            if best_w3:
-                core_words.append(best_w3)
-                return '·'.join(core_words), core_words
-            else:
-                return f"{w1}·{w2}", core_words
+            for chunk in chunks:
+                if len(chunk) < 2:
+                    continue
+                for n in range(min(3, len(chunk)), 1, -1):
+                    for i in range(len(chunk) - n + 1):
+                        words = [item[0] for item in chunk[i:i+n]]
+                        flags = [item[1] for item in chunk[i:i+n]]
+                        phrase = ''.join(words)
+                        if len(phrase) < 4:
+                            continue
+                        if not _is_valid_phrase(words, flags):
+                            continue
+                        if phrase not in phrase_data:
+                            phrase_data[phrase] = {'news_ids': set(), 'count': 0}
+                        phrase_data[phrase]['news_ids'].add(news_id)
+                        phrase_data[phrase]['count'] = len(phrase_data[phrase]['news_ids'])
+                        for w in words:
+                            all_words[w] += 1
         else:
-            # 兜底：单个最高频关键词
-            return good_kws[0], [good_kws[0]]
+            # 英文：保留2-gram/3-gram，要求包含至少一个内容词
+            words = re.findall(r'\b[a-zA-Z]+\b', title.lower())
+            words = [w for w in words if len(w) >= 3 and w not in STOP_WORDS]
+            for n in range(3, 1, -1):
+                if len(words) < n:
+                    continue
+                for i in range(len(words) - n + 1):
+                    phrase_words = words[i:i+n]
+                    phrase = ' '.join(phrase_words)
+                    content_words = [w for w in phrase_words if w not in common_verbs and w not in STOP_WORDS]
+                    if len(content_words) < 1:
+                        continue
+                    if phrase not in phrase_data:
+                        phrase_data[phrase] = {'news_ids': set(), 'count': 0}
+                    phrase_data[phrase]['news_ids'].add(news_id)
+                    phrase_data[phrase]['count'] = len(phrase_data[phrase]['news_ids'])
+                    for w in phrase_words:
+                        all_words[w] += 1
     
-    # 生成话题信息
+    if not phrase_data:
+        return []
+    
+    # 计算IDF
+    N = len(news_list)
+    idf = {}
+    for word, freq in all_words.items():
+        idf[word] = math.log(N / (freq + 1)) + 1.0
+    
+    # 计算短语得分
+    scored_phrases = []
+    for phrase, data in phrase_data.items():
+        doc_freq = data['count']
+        if doc_freq < 2:
+            continue
+        # 拆分词
+        if ' ' in phrase:
+            words = phrase.split()
+        else:
+            words = list(jieba.cut(phrase))
+        avg_idf = sum(idf.get(w, 1.0) for w in words) / len(words) if words else 1.0
+        if avg_idf < 1.3:  # 过滤通用词组合
+            continue
+        length = len(words)
+        score = doc_freq * avg_idf * (1 + 0.15 * length)
+        scored_phrases.append((phrase, score, doc_freq, data['news_ids']))
+    
+    # LCS重叠合并（阈值30%）
+    scored_phrases.sort(key=lambda x: x[1], reverse=True)
+    merged = []
+    for phrase, score, doc_freq, news_ids in scored_phrases:
+        is_dup = False
+        for merged_phrase, _, _, _ in merged:
+            if phrase in merged_phrase or merged_phrase in phrase:
+                is_dup = True
+                break
+            lcs = _lcs_length(phrase, merged_phrase)
+            shorter = min(len(phrase), len(merged_phrase))
+            if shorter > 0 and lcs / shorter > 0.3:
+                is_dup = True
+                break
+        if not is_dup:
+            merged.append((phrase, score, doc_freq, news_ids))
+    
+    # 生成话题
     topics = []
-    for cluster in clusters:
-        topic_name, core_keywords = _generate_topic_name(cluster)
-        
-        # 兜底：共现失败则用标题
-        if not topic_name:
-            rep_title = news_keywords[cluster[0]]['title']
-            if rep_title:
-                title_clean = rep_title
-                title_clean = re.sub(r'^[\u4e00-\u9fa5]{2,5}[：:|]', '', title_clean)
-                title_clean = re.sub(r'[_|｜][\u4e00-\u9fa5a-zA-Z]+$', '', title_clean)
-                title_clean = re.sub(r'(\d+日说|\d+日称|\d+日表示|\d+日回应|当地时间\d+日|暂无回应)$', '', title_clean)
-                title_clean = title_clean.strip()
-                if title_clean and len(title_clean) >= 6 and not re.search(r'(share|saveclick|homepage|posts|secondsplay|video)', title_clean, re.IGNORECASE):
-                    topic_name = title_clean[:18] + "..." if len(title_clean) > 18 else title_clean
-            # 标题兜底时，core_keywords 用簇内 top3 高质量词
-            kw_freq = Counter()
-            for nid in cluster:
-                for w in news_keywords[nid]['keywords']:
-                    if _is_good_kw(w):
-                        kw_freq[w] += 1
-            core_keywords = [w for w, _ in kw_freq.most_common(3)]
-        
-        if not topic_name:
-            print(f"[Topics] 丢弃簇（无法生成话题名）：{news_keywords[cluster[0]]['title'][:30]}...")
-            continue
-        if len(re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9]', '', topic_name)) < 3:
-            print(f"[Topics] 丢弃簇（话题名过短）：'{topic_name}'")
-            continue
-        if re.search(r'(share|saveclick|homepage|posts|secondsplay|seconds|play)', topic_name, re.IGNORECASE):
-            print(f"[Topics] 丢弃簇（包含UI垃圾词）：'{topic_name}'")
-            continue
-        
-        # ===== 反向硬校验：新闻必须包含至少2个话题核心词 =====
-        if len(core_keywords) >= 2:
-            filtered_cluster = [
-                nid for nid in cluster
-                if len(set(news_keywords[nid]['keywords']) & set(core_keywords)) >= 2
-            ]
-            if len(filtered_cluster) == 0:
-                print(f"[Topics] 丢弃簇（反向校验无通过成员）：'{topic_name}'")
+    for phrase, score, doc_freq, news_ids in merged[:15]:
+        related_ids = []
+        for nid, title, _, lang in news_list:
+            if nid not in news_ids:
                 continue
-            if len(filtered_cluster) < len(cluster):
-                print(f"[Topics] 反向校验剔除 {len(cluster) - len(filtered_cluster)} 篇不相关新闻，从 '{topic_name}' ({len(cluster)}->{len(filtered_cluster)})")
-                cluster = filtered_cluster
+            if lang == 'zh':
+                if phrase in title:
+                    related_ids.append(nid)
+            else:
+                if phrase in title.lower():
+                    related_ids.append(nid)
         
-        # 统计最终关键词
-        keyword_freq = Counter()
-        for news_id in cluster:
-            for w, cnt in news_keywords[news_id]['tf'].items():
-                keyword_freq[w] += cnt
-        top_keywords = [kw for kw, _ in keyword_freq.most_common(10)]
-        good_keywords = [kw for kw in top_keywords if _is_good_kw(kw)]
-        
-        if len(good_keywords) < 2 and len(cluster) < 2:
-            print(f"[Topics] 丢弃低质量簇（仅{len(cluster)}条新闻，高质量词{len(good_keywords)}个）：'{topic_name}'")
+        if len(related_ids) < 2:
             continue
         
-        print(f"[Topics] 生成话题：'{topic_name}'（{len(cluster)}篇新闻）")
+        representative_id = related_ids[0]
         topics.append({
-            'name': topic_name,
-            'keywords': top_keywords,
-            'news_ids': cluster,
-            'news_count': len(cluster),
-            'representative_id': cluster[0]
+            'name': phrase,
+            'keywords': [phrase],
+            'news_ids': related_ids,
+            'news_count': len(related_ids),
+            'representative_id': representative_id
         })
     
     topics.sort(key=lambda x: x['news_count'], reverse=True)
@@ -679,8 +601,8 @@ def update_hot_topics_internal():
         
         print(f"获取到 {len(news_list)} 篇新闻，开始聚类...")
         
-        # 聚类（使用函数默认阈值）
-        topics = cluster_news_for_topics(news_list)
+        # 提取热点话题（基于标题事件短语）
+        topics = extract_hot_topics(news_list)
         
         if not topics:
             print("聚类结果为空")
@@ -958,7 +880,7 @@ def get_dashboard():
             country_result = conn.execute(text("""
                 SELECT country_code, COUNT(*) as cnt
                 FROM news_countries
-                WHERE news_id IN (SELECT news_id FROM news WHERE is_active = TRUE AND created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR))
+                WHERE news_id IN (SELECT news_id FROM news WHERE created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR))
                 AND is_primary = 1
                 GROUP BY country_code
                 ORDER BY cnt DESC
@@ -998,7 +920,6 @@ def get_dashboard():
                      WHERE news_id = n.news_id AND is_primary = 1 LIMIT 1) as country
                 FROM news n
                 JOIN sources s ON n.source_id = s.source_id
-                WHERE n.is_active = TRUE
                 ORDER BY n.created_at DESC
                 LIMIT 20
             """))
