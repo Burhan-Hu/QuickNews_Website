@@ -123,7 +123,7 @@ class XMLSearchEngine:
         self.engine = engine
 
     def search(self, query, start=1, maximum_records=20, sort_by='relevance'):
-        """执行SRU搜索（XML检索增强版）"""
+        """执行SRU搜索（XML检索增强版）- 使用 inverted_index 表"""
         try:
             with self.engine.connect() as conn:
                 # 预处理查询：分词
@@ -131,69 +131,52 @@ class XMLSearchEngine:
                 if not query_terms:
                     return self._empty_response(query, start, maximum_records)
                 
-                # 构建布尔查询条件
-                conditions = []
-                params = {}
+                # 构建查询
+                term_list = query_terms[:5]
+                placeholders = ', '.join([f':t{i}' for i in range(len(term_list))])
                 
-                for i, term in enumerate(query_terms):
-                    param_name = f'term_{i}'
-                    params[param_name] = f'%{term}%'
-                    # 使用JSON搜索：title_terms 和 content_terms 都包含该词
-                    conditions.append(f"""
-                        (JSON_SEARCH(title_terms, 'one', :{param_name}) IS NOT NULL 
-                         OR JSON_SEARCH(content_terms, 'one', :{param_name}) IS NOT NULL)
-                    """)
-                
-                # 所有词都必须出现（AND逻辑）
-                where_clause = ' AND '.join(conditions)
-                
-                # 计数
-                count_sql = f"""
-                    SELECT COUNT(*) FROM news 
-                    WHERE {where_clause}
-                """
-                total = conn.execute(text(count_sql), params).scalar() or 0
-                
-                if total == 0:
-                    return self._empty_response(query, start, maximum_records)
-                
-                # 排序
-                order_clause = 'n.created_at DESC' if sort_by == 'date' else 'n.news_id DESC'
-                
-                # 分页查询
-                offset = max(0, start - 1)
-                limit = min(maximum_records, 50)
-                
-                search_sql = f"""
+                sql = f"""
                     SELECT 
-                        n.news_id, n.title, n.summary, n.source_url,
-                        n.created_at, n.language, n.has_video,
-                        (SELECT country_code FROM news_countries 
-                         WHERE news_id = n.news_id AND is_primary = 1 LIMIT 1) as country
-                    FROM news n
-                    WHERE {where_clause}
-                    ORDER BY {order_clause}
+                        n.news_id,
+                        n.xml_content,
+                        n.title,
+                        n.created_at,
+                        SUM(ii.tf_weight) as score,
+                        COUNT(DISTINCT ii.term) as match_count
+                    FROM inverted_index ii
+                    JOIN news n ON ii.news_id = n.news_id
+                    WHERE ii.term IN ({placeholders})
+                      AND ii.language = :lang
+                      AND n.created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR)
+                    GROUP BY n.news_id
+                    HAVING match_count >= :min_match
+                    ORDER BY score DESC, n.created_at DESC
                     LIMIT :limit OFFSET :offset
                 """
-                params['limit'] = limit
-                params['offset'] = offset
                 
-                result = conn.execute(text(search_sql), params)
+                params = {f't{i}': t for i, t in enumerate(term_list)}
+                params.update({
+                    'lang': 'zh' if any('\u4e00' <= c <= '\u9fff' for c in query) else 'en',
+                    'min_match': max(1, len(term_list) * 0.5),
+                    'limit': min(maximum_records, 50),
+                    'offset': max(0, start - 1)
+                })
+                
+                result = conn.execute(text(sql), params)
                 
                 records = []
                 for row in result.fetchall():
                     records.append({
                         'id': row[0],
-                        'title': row[1],
-                        'summary': row[2],
-                        'url': row[3],
-                        'date': row[4].isoformat() if row[4] else None,
-                        'language': row[5],
-                        'country': row[7] or 'unknown',
-                        'has_video': bool(row[6])
+                        'xml': row[1],
+                        'title': row[2],
+                        'summary': '',
+                        'url': '',
+                        'score': row[4],
+                        'time': row[3]
                     })
                 
-                return self._build_sru_response(query, start, maximum_records, total, records)
+                return self._build_sru_response(query, start, maximum_records, len(records), records)
                 
         except Exception as e:
             print(f"[Search Error] {e}")
@@ -948,15 +931,199 @@ def get_dashboard():
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
+# ==================== 新增 API 端点（从旧版恢复）====================
+
+@app.route('/api/stats/countries', methods=['GET'])
+def get_country_stats():
+    """
+    获取近48小时内各国新闻数量统计（包含所有关联国家）
+    返回格式: {"CN": 45, "US": 38, ...}
+    """
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT 
+                    nc.country_code,
+                    COUNT(DISTINCT nc.news_id) as news_count
+                FROM news_countries nc
+                JOIN news n ON nc.news_id = n.news_id
+                WHERE n.created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR)
+                  AND nc.is_primary = TRUE
+                GROUP BY nc.country_code
+                ORDER BY news_count DESC
+            """))
+            stats = {}
+            for row in result.fetchall():
+                if row[0]:
+                    stats[row[0]] = row[1]
+            return jsonify(stats)
+    except Exception as e:
+        print(f"[API Error] get_country_stats: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/categories', methods=['GET'])
+def get_categories():
+    """
+    获取所有新闻分类
+    """
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT 
+                    category_id,
+                    category_name,
+                    category_code,
+                    color_code
+                FROM categories
+                ORDER BY sort_order ASC
+            """))
+            categories = []
+            for row in result.fetchall():
+                categories.append({
+                    "category_id": row[0],
+                    "category_name": row[1],
+                    "category_code": row[2],
+                    "color_code": row[3]
+                })
+            return jsonify(categories)
+    except Exception as e:
+        print(f"[API Error] get_categories: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/news/category/<category_code>', methods=['GET'])
+def get_news_by_category(category_code):
+    """
+    获取指定分类下的最新新闻
+    """
+    try:
+        with engine.connect() as conn:
+            cat_result = conn.execute(
+                text("SELECT category_id FROM categories WHERE category_code = :code"),
+                {'code': category_code}
+            ).fetchone()
+            if not cat_result:
+                return jsonify({"error": "Category not found"}), 404
+            category_id = cat_result[0]
+            result = conn.execute(text("""
+                SELECT 
+                    n.news_id, n.title, n.summary, n.created_at, nc.country_code
+                FROM news n
+                JOIN news_categories ncat ON n.news_id = ncat.news_id
+                LEFT JOIN news_countries nc ON n.news_id = nc.news_id AND nc.is_primary = TRUE
+                WHERE ncat.category_id = :category_id
+                  AND n.created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR)
+                ORDER BY n.created_at DESC
+                LIMIT 20
+            """), {'category_id': category_id})
+            news_list = []
+            for row in result.fetchall():
+                news_list.append({
+                    "id": row[0],
+                    "title": row[1],
+                    "summary": (row[2][:200] + '...') if row[2] and len(row[2]) > 200 else (row[2] or ''),
+                    "time": row[3].strftime('%Y-%m-%d %H:%M:%S') if row[3] else None,
+                    "country": row[4] or ''
+                })
+            return jsonify(news_list)
+    except Exception as e:
+        print(f"[API Error] get_news_by_category: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/news/<int:news_id>', methods=['GET'])
+def get_news_detail(news_id):
+    """
+    获取单条新闻详情（含图片、视频）
+    """
+    try:
+        with engine.connect() as conn:
+            news_result = conn.execute(text("""
+                SELECT 
+                    n.news_id, n.title, n.summary, n.content, n.published_at,
+                    n.source_url, s.source_name, nc.country_code, c.country_name
+                FROM news n
+                LEFT JOIN sources s ON n.source_id = s.source_id
+                LEFT JOIN news_countries nc ON n.news_id = nc.news_id AND nc.is_primary = TRUE
+                LEFT JOIN countries c ON nc.country_code = c.country_code
+                WHERE n.news_id = :news_id
+                LIMIT 1
+            """), {'news_id': news_id})
+            row = news_result.fetchone()
+            if not row:
+                return jsonify({"error": "News not found"}), 404
+            news_data = {
+                "id": row[0],
+                "title": row[1],
+                "summary": row[2],
+                "content": row[3] or row[2] or "",
+                "published_at": row[4].strftime('%Y-%m-%d %H:%M:%S') if row[4] else None,
+                "source_url": row[5],
+                "source_name": row[6] or "未知来源",
+                "country_code": row[7],
+                "country_name": row[8]
+            }
+            # 获取图片
+            images_result = conn.execute(text("""
+                SELECT media_url FROM media
+                WHERE news_id = :news_id AND media_type = 'image'
+                ORDER BY media_id ASC
+            """), {'news_id': news_id})
+            news_data["images"] = [{"url": r[0]} for r in images_result.fetchall()]
+            # 获取视频
+            videos_result = conn.execute(text("""
+                SELECT media_url FROM media
+                WHERE news_id = :news_id AND media_type = 'video'
+                ORDER BY media_id ASC
+            """), {'news_id': news_id})
+            videos = []
+            for r in videos_result.fetchall():
+                url = r[0]
+                vtype = "mp4"
+                if '.m3u8' in url.lower(): vtype = "hls"
+                elif 'youtube' in url.lower() or 'youtu.be' in url.lower(): vtype = "youtube"
+                elif 'bilibili' in url.lower(): vtype = "bilibili"
+                elif 'player' in url.lower() or 'embed' in url.lower(): vtype = "embed"
+                videos.append({"url": url, "type": vtype})
+            news_data["videos"] = videos
+            return jsonify(news_data)
+    except Exception as e:
+        print(f"[API Error] get_news_detail: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+# 前端路由 - 所有非 API 请求都返回 index.html（支持 React Router）
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def serve_frontend(path):
+    """服务前端静态文件"""
+    if path.startswith('api/') or path.startswith('sru') or path == 'health':
+        return jsonify({"error": "Not found"}), 404
+    file_path = os.path.join(STATIC_DIR, path)
+    if path and os.path.exists(file_path) and os.path.isfile(file_path):
+        return send_from_directory(STATIC_DIR, path)
+    index_path = os.path.join(STATIC_DIR, 'index.html')
+    if os.path.exists(index_path):
+        return send_from_directory(STATIC_DIR, 'index.html')
+    return jsonify({
+        "status": "QuickNews API is running",
+        "endpoints": {
+            "health": "/health",
+            "api": "/api/*",
+            "sru": "/sru",
+            "categories": "/api/categories",
+            "country_stats": "/api/stats/countries",
+            "hot_topics": "/api/topics"
+        }
+    })
+
+
 @app.route('/health', methods=['GET'])
 def health_check():
     """健康检查"""
     return jsonify({'status': 'ok', 'timestamp': datetime.now().isoformat()})
 
-@app.route('/', methods=['GET'])
-def index():
-    """静态文件入口"""
-    return send_from_directory(STATIC_DIR, 'index.html')
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=False)
