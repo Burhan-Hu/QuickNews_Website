@@ -58,7 +58,22 @@ ZH_JUNK_PATTERN = re.compile('|'.join(ZH_JUNK_PATTERNS))
 ZH_JUNK_WORDS = {
     '新华社', '新华网', '央视新闻', '央视网', '人民日报', '环球时报', '界面新闻',
     '当地时间', '北京时间', '日说', '日称', '日表示', '日回应', '暂无', '对此',
-    '报道称', '据报道', '消息称', '消息称', '知情人士', '消息人士',
+    '报道称', '据报道', '消息称', '消息人士', '知情人士',
+}
+
+# 通用实体词降级（国家名、通用政治词汇等，在聚类中权重降低，不计入共享词数量）
+COMMON_ENTITY_WORDS = {
+    '美国', '中国', '伊朗', '俄罗斯', '乌克兰', '以色列', '朝鲜', '韩国', '日本',
+    '英国', '法国', '德国', '印度', '巴基斯坦', '阿富汗', '叙利亚', '伊拉克',
+    '土耳其', '埃及', '沙特', '阿联酋', '卡塔尔', '约旦', '黎巴嫩', '也门',
+    '政府', '官员', '总统', '部长', '总理', '会谈', '谈判', '表示', '称', '说',
+    '报道', '声明', '回应', '指出', '认为', '强调', '介绍', '国际', '国家', '地区',
+    '城市', '人民', '军队', '军事', '政治', '经济', '社会', '文化', '科技', '外交',
+    'trump', 'biden', 'government', 'officials', 'president', 'minister', 'prime',
+    'talks', 'negotiations', 'said', 'says', 'reported', 'according', 'statement',
+    'response', 'meeting', 'conference', 'summit', 'leader', 'leaders', 'country',
+    'countries', 'nation', 'nations', 'world', 'global', 'region', 'regional',
+    'city', 'people', 'military', 'army', 'political', 'economic', 'official',
 }
 
 def _is_zh_junk(word):
@@ -106,769 +121,166 @@ CORS(app, resources={
 class XMLSearchEngine:
     def __init__(self):
         self.engine = engine
-    
-    def parse_query(self, query_str):
-        """
-        解析查询字符串：
-        - 支持字段限定：title:中国, content:经济, country:US
-        - 支持布尔逻辑：AND, OR, NOT（简化实现为AND）
-        """
-        # 提取字段限定
-        xpath_map = {
-            'title': '/news/title',
-            'content': '/news/content',
-            'country': '/news/metadata/country'
-        }
-        
-        xpath_filter = None
-        clean_query = query_str
-        
-        # 检查字段限定
-        if ':' in query_str and not '://' in query_str:
-            parts = query_str.split(':')
-            if len(parts) >= 2 and parts[0].lower() in xpath_map:
-                xpath_filter = xpath_map[parts[0].lower()]
-                clean_query = ':'.join(parts[1:]).strip()
-    
-        # 分词（简化版，与processor一致）
-        lang = 'zh' if any('\u4e00' <= c <= '\u9fff' for c in clean_query) else 'en'
-    
-        if lang == 'zh':
-            terms = [clean_query[i:i+2] for i in range(len(clean_query)-1) if '\u4e00' <= clean_query[i] <= '\u9fff']
-            terms = list(set(terms))
-        else:
-            # 【修复】对国家代码特殊处理：允许2字符长度
-            if xpath_filter == '/news/metadata/country':
-                # 国家查询：直接保留原词（不转小写，不限制长度>2）
-                terms = [clean_query.strip()]
-            else:
-                # 普通英文查询：保留>2字符的词
-                terms = [t.lower() for t in re.findall(r'\b\w+\b', clean_query) if len(t) > 2]
-    
-        return terms, lang, xpath_filter, clean_query
-    
-    def _get_latest_news(self, max_results=20, offset=0):
-        """获取最新新闻（内部方法，用于 * 查询）"""
-        sql = text("""
-            SELECT 
-                n.news_id,
-                n.xml_content,
-                n.title,
-                n.created_at,
-                1.0 as score,
-                1 as match_count
-            FROM news n
-            WHERE n.created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR)
-            ORDER BY n.created_at DESC
-            LIMIT :limit OFFSET :offset
-        """)
-        
-        with self.engine.connect() as conn:
-            rows = conn.execute(sql, {'limit': max_results, 'offset': offset}).fetchall()
-            results = []
-            for r in rows:
-                try:
-                    xml_root = ET.fromstring(r[1] if r[1] else f'<news id="{r[0]}"><title>{html.escape(r[2])}</title></news>')
-                    results.append({
-                        'id': r[0], 'xml': r[1], 'title': r[2], 
-                        'score': r[4], 'time': r[3]
-                    })
-                except:
-                    results.append({
-                        'id': r[0], 'xml': r[1], 'title': r[2], 
-                        'score': r[4], 'time': r[3]
-                    })
-            return results, len(results)
 
-    def search(self, query_str, max_results=20, offset=0):
-        """执行XML检索"""
-        
-        # 【新增】查询为 * 时，直接返回最新新闻（用于 getLatestNews）
-        if query_str.strip() == '*':
-            return self._get_latest_news(max_results, offset)
-        
-        terms, lang, xpath, clean_query = self.parse_query(query_str)
-    
-        # 【新增】国家查询特殊处理（强制大写 + 直接查 news_countries 表）
-        if xpath == '/news/metadata/country':
-            print(f"Debug: xpath={xpath}, terms={terms}, lang={lang}")
-            if not terms:
-                return [], 0
-        
-            # 转大写：us -> US, cn -> CN
-            country_codes = [t.upper() for t in terms if len(t) >= 2]
-            if not country_codes:
-                return [], 0
-        
-            # 直接查 news_countries 表（精确匹配，不依赖倒排索引的大小写）
-            # 【统一主要关联国逻辑】只查询 is_primary = TRUE 的记录，与热力图保持一致
-            placeholders = ', '.join([f':c{i}' for i in range(len(country_codes))])
-            sql = text(f"""
-                SELECT 
-                    n.news_id,
-                    n.xml_content,
-                    n.title,
-                    n.created_at,
-                    1.5 as score,
-                    1 as match_count
-                FROM news n
-                JOIN news_countries nc ON n.news_id = nc.news_id AND nc.is_primary = TRUE
-                WHERE nc.country_code IN ({placeholders})
-                  AND n.created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR)
-                ORDER BY n.created_at DESC
-                LIMIT :limit OFFSET :offset
-            """)
-        
-            params = {f'c{i}': c for i, c in enumerate(country_codes)}
-            params.update({'limit': max_results, 'offset': offset})
-        
+    def search(self, query, start=1, maximum_records=20, sort_by='relevance'):
+        """执行SRU搜索（XML检索增强版）"""
+        try:
             with self.engine.connect() as conn:
-                rows = conn.execute(sql, params).fetchall()
-                results = []
-                for r in rows:
-                    try:
-                        xml_root = ET.fromstring(r[1] if r[1] else f'<news id="{r[0]}"><title>{html.escape(r[2])}</title></news>')
-                        results.append({
-                            'id': r[0], 'xml': r[1], 'title': r[2], 
-                            'score': r[4], 'time': r[3]
-                        })
-                    except:
-                        results.append({
-                            'id': r[0], 'xml': r[1], 'title': r[2], 
-                            'score': r[4], 'time': r[3]
-                        })
-                return results, len(results)
-    
-        # title查询回退到LIKE匹配，避免bigram索引无法命中jieba热点短语
-        if xpath == '/news/title':
-            if not clean_query:
-                return [], 0
-            
-            def _build_results(rows):
-                results = []
-                for r in rows:
-                    try:
-                        xml_root = ET.fromstring(r[1] if r[1] else f'<news id="{r[0]}"><title>{html.escape(r[2])}</title></news>')
-                        results.append({'id': r[0], 'xml': r[1], 'title': r[2], 'score': r[4], 'time': r[3]})
-                    except:
-                        results.append({'id': r[0], 'xml': r[1], 'title': r[2], 'score': r[4], 'time': r[3]})
-                return results
-            
-            safe_pattern = clean_query.replace('%', '\\%').replace('_', '\\_')
-            sql = text("""
-                SELECT n.news_id, n.xml_content, n.title, n.created_at, 2.0 as score, 1 as match_count
-                FROM news n
-                WHERE n.title LIKE :pattern
-                  AND n.created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR)
-                ORDER BY n.created_at DESC
-                LIMIT :limit OFFSET :offset
-            """)
-            with self.engine.connect() as conn:
-                rows = conn.execute(sql, {'pattern': f'%{safe_pattern}%', 'limit': max_results, 'offset': offset}).fetchall()
-                results = _build_results(rows)
-                if results:
-                    return results, len(results)
-            
-            # 兜底：拆成关键词用 AND LIKE 搜索（兼容jieba空格丢失、merge超长词等情况）
-            keywords = [k for k in re.split(r'[^a-zA-Z0-9\u4e00-\u9fff]+', clean_query) if len(k) >= 2]
-            if keywords:
-                like_clauses = ' AND '.join([f"n.title LIKE :p{i}" for i in range(len(keywords))])
-                sql_fallback = text(f"""
-                    SELECT n.news_id, n.xml_content, n.title, n.created_at, 1.5 as score, 1 as match_count
-                    FROM news n
-                    WHERE {like_clauses}
-                      AND n.created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR)
-                    ORDER BY n.created_at DESC
-                    LIMIT :limit OFFSET :offset
-                """)
+                # 预处理查询：分词
+                query_terms = self._tokenize_query(query)
+                if not query_terms:
+                    return self._empty_response(query, start, maximum_records)
+                
+                # 构建布尔查询条件
+                conditions = []
                 params = {}
-                for i, kw in enumerate(keywords):
-                    safe_kw = kw.replace('%', '\\%').replace('_', '\\_')
-                    params[f'p{i}'] = f'%{safe_kw}%'
-                params.update({'limit': max_results, 'offset': offset})
-                with self.engine.connect() as conn:
-                    rows = conn.execute(sql_fallback, params).fetchall()
-                    results = _build_results(rows)
-                    return results, len(results)
-            
-            return [], 0
-    
-        # 原有的 title/content 查询逻辑保持不变...
-        if not terms:
-            return [], 0
-    
-        term_list = terms[:5]
-        placeholders = ', '.join([f':t{i}' for i in range(len(term_list))])
-        
-        # 基础查询
-        sql = f"""
-            SELECT 
-                n.news_id,
-                n.xml_content,
-                n.title,
-                n.created_at,
-                SUM(ii.tf_weight) as score,
-                COUNT(DISTINCT ii.term) as match_count
-            FROM inverted_index ii
-            JOIN news n ON ii.news_id = n.news_id
-            WHERE ii.term IN ({placeholders})
-              AND ii.language = :lang
-              AND n.created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR)
-        """
-        
-        # 添加XPath限定
-        if xpath:
-            sql += " AND ii.xpath_path = :xpath"
-        
-        sql += """
-            GROUP BY n.news_id
-            HAVING match_count >= :min_match
-            ORDER BY score DESC, n.created_at DESC
-            LIMIT :limit OFFSET :offset
-        """
-        
-        params = {f't{i}': t for i, t in enumerate(term_list)}
-        params.update({
-            'lang': lang,
-            'min_match': max(1, len(term_list) * 0.5),  # 至少匹配50%的词
-            'limit': max_results,
-            'offset': offset
-        })
-        
-        if xpath:
-            params['xpath'] = xpath
-        
-        with self.engine.connect() as conn:
-            rows = conn.execute(text(sql), params).fetchall()
-            results = []
-            for r in rows:
-                try:
-                    # 解析XML提取结构化数据
-                    xml_root = ET.fromstring(r[1] if r[1] else f'<news id="{r[0]}"><title>{html.escape(r[2])}</title></news>')
-                    results.append({
-                        'id': r[0],
-                        'xml': r[1],
-                        'title': r[2],
-                        'score': r[4],
-                        'time': r[3]
+                
+                for i, term in enumerate(query_terms):
+                    param_name = f'term_{i}'
+                    params[param_name] = f'%{term}%'
+                    # 使用JSON搜索：title_terms 和 content_terms 都包含该词
+                    conditions.append(f"""
+                        (JSON_SEARCH(title_terms, 'one', :{param_name}) IS NOT NULL 
+                         OR JSON_SEARCH(content_terms, 'one', :{param_name}) IS NOT NULL)
+                    """)
+                
+                # 所有词都必须出现（AND逻辑）
+                where_clause = ' AND '.join(conditions)
+                
+                # 计数
+                count_sql = f"""
+                    SELECT COUNT(*) FROM news 
+                    WHERE {where_clause} AND is_active = TRUE
+                """
+                total = conn.execute(text(count_sql), params).scalar() or 0
+                
+                if total == 0:
+                    return self._empty_response(query, start, maximum_records)
+                
+                # 排序
+                order_clause = 'n.created_at DESC' if sort_by == 'date' else 'n.news_id DESC'
+                
+                # 分页查询
+                offset = max(0, start - 1)
+                limit = min(maximum_records, 50)
+                
+                search_sql = f"""
+                    SELECT 
+                        n.news_id, n.title, n.summary, n.source_url,
+                        n.created_at, n.language, n.has_video,
+                        (SELECT country_code FROM news_countries 
+                         WHERE news_id = n.news_id AND is_primary = 1 LIMIT 1) as country
+                    FROM news n
+                    WHERE {where_clause} AND n.is_active = TRUE
+                    ORDER BY {order_clause}
+                    LIMIT :limit OFFSET :offset
+                """
+                params['limit'] = limit
+                params['offset'] = offset
+                
+                result = conn.execute(text(search_sql), params)
+                
+                records = []
+                for row in result.fetchall():
+                    records.append({
+                        'id': row[0],
+                        'title': row[1],
+                        'summary': row[2],
+                        'url': row[3],
+                        'date': row[4].isoformat() if row[4] else None,
+                        'language': row[5],
+                        'country': row[7] or 'unknown',
+                        'has_video': bool(row[6])
                     })
-                except:
-                    results.append({
-                        'id': r[0],
-                        'xml': r[1],
-                        'title': r[2],
-                        'score': r[4],
-                        'time': r[3]
-                    })
-            
-            return results, len(results)
+                
+                return self._build_sru_response(query, start, maximum_records, total, records)
+                
+        except Exception as e:
+            print(f"[Search Error] {e}")
+            import traceback
+            traceback.print_exc()
+            return self._error_response(str(e))
     
-    def generate_sru_response(self, query, results, start=1, total=None):
-        """生成SRU标准XML响应"""
-        if total is None:
-            total = len(results)
+    def _tokenize_query(self, query):
+        """查询分词：中英文混合"""
+        if not query:
+            return []
         
-        root = ET.Element("searchRetrieveResponse")
-        ET.SubElement(root, "version").text = "1.1"
-        ET.SubElement(root, "numberOfRecords").text = str(total)
+        # 清洗
+        query = re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9\s]', ' ', query)
+        terms = []
         
-        records = ET.SubElement(root, "records")
-        for idx, r in enumerate(results, start):
-            record = ET.SubElement(records, "record")
-            ET.SubElement(record, "recordSchema").text = "news"
-            ET.SubElement(record, "recordPacking").text = "xml"
-            ET.SubElement(record, "recordPosition").text = str(idx)
-            
-            # 添加时间戳（供前端展示）
-            if r.get('time'):
-                time_val = r['time']
-                if hasattr(time_val, 'strftime'):
-                    time_str = time_val.strftime('%Y-%m-%d %H:%M:%S')
-                else:
-                    time_str = str(time_val)
-                datestamp = ET.SubElement(record, "datestamp")
-                datestamp.text = time_str
-            
-            rec_data = ET.SubElement(record, "recordData")
-            if r['xml']:
-                try:
-                    # 嵌入预存XML
-                    elem = ET.fromstring(r['xml'])
-                    rec_data.append(elem)
-                except:
-                    ET.SubElement(rec_data, "news").text = r['title']
-            else:
-                ET.SubElement(rec_data, "news").text = r['title']
+        # 中文用jieba
+        if _JIEBA_AVAILABLE:
+            words = jieba.lcut(query)
+        else:
+            words = query.split()
         
-        # 回显查询
-        echo = ET.SubElement(root, "echoedSearchRetrieveRequest")
-        ET.SubElement(echo, "query").text = query
+        for word in words:
+            word = word.strip().lower()
+            if not word or word in STOP_WORDS:
+                continue
+            if len(word) >= 2:
+                terms.append(word)
         
-        return ET.tostring(root, encoding='unicode', method='xml')
-
-engine_search = XMLSearchEngine()
-
-@app.route('/sru', methods=['GET'])
-def sru_search():
-    """
-    SRU协议检索端点
-    参数：
-    - query: 查询词（支持title:xxx, content:xxx限定）
-    - start: 起始位置
-    - maximumRecords: 每页数量（最大50）
-    - language: 强制语言（zh/en，可选）
-    """
-    query = request.args.get('query', '').strip()
-    start = int(request.args.get('start', 1))
-    max_records = min(int(request.args.get('maximumRecords', 20)), 50)
+        return list(set(terms))
     
-    if not query:
-        return Response(
-            '<error>Query parameter is required</error>',
-            mimetype='application/xml',
-            status=400
-        )
+    def _empty_response(self, query, start, maximum_records):
+        return self._build_sru_response(query, start, maximum_records, 0, [])
     
-    results, total = engine_search.search(query, max_records, start-1)
-    xml_resp = engine_search.generate_sru_response(query, results, start, total)
+    def _error_response(self, message):
+        root = ET.Element('searchRetrieveResponse')
+        ET.SubElement(root, 'version').text = '1.1'
+        diag = ET.SubElement(root, 'diagnostics')
+        ET.SubElement(diag, 'message').text = message
+        return Response(ET.tostring(root, encoding='unicode'), mimetype='application/xml')
     
-    return Response(xml_resp, mimetype='application/xml; charset=utf-8')
-
-@app.route('/sru/explain', methods=['GET'])
-def sru_explain():
-    """SRU协议说明"""
-    explain = """<?xml version="1.0"?>
-    <explainResponse>
-        <serverInfo>
-            <host>oracle-cloud-vm</host>
-            <port>5000</port>
-            <database>quicknews_maindb</database>
-        </serverInfo>
-        <indexInfo>
-            <index><title>Title</title><map>title</map></index>
-            <index><title>Content</title><map>content</map></index>
-            <index><title>Country</title><map>country</map></index>
-        </indexInfo>
-        <configInfo>
-            <supports>Boolean AND</supports>
-            <supports>Fielded search (title:, content:, country:)</supports>
-            <supports>Chinese n-gram</supports>
-            <supports>English stemmed words</supports>
-        </configInfo>
-    </explainResponse>"""
-    return Response(explain, mimetype='application/xml')
-
-@app.route('/health', methods=['GET'])
-def health():
-    """健康检查"""
-    try:
-        conn = engine.connect()
-        conn.execute(text("SELECT 1"))
-        conn.close()
-        return {'status': 'ok', 'database': 'connected'}
-    except Exception as e:
-        return {'status': 'error', 'message': str(e)}, 500
-
-
-# ==================== 新增 API 端点 ====================
-
-@app.route('/api/stats/countries', methods=['GET'])
-def get_country_stats():
-    """
-    获取近48小时内各国新闻数量统计（包含所有关联国家）
-    返回格式: {"CN": 45, "US": 38, "JP": 25, ...}
-    """
-    try:
-        with engine.connect() as conn:
-            # 限制 is_primary = TRUE
-            result = conn.execute(text("""
-                SELECT 
-                    nc.country_code,
-                    COUNT(DISTINCT nc.news_id) as news_count
-                FROM news_countries nc
-                JOIN news n ON nc.news_id = n.news_id
-                WHERE n.created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR)
-                  AND nc.is_primary = TRUE        -- 只统计主要关联国
-                GROUP BY nc.country_code
-                ORDER BY news_count DESC
-            """))
-            
-            stats = {}
-            for row in result.fetchall():
-                country_code = row[0]
-                count = row[1]
-                if country_code:
-                    stats[country_code] = count
-            
-            return jsonify(stats)
-    except Exception as e:
-        print(f"[API Error] get_country_stats: {e}")
-        return jsonify({"error": str(e)}), 500
-
-
-# ==================== 停用词表 ====================
-
-# 中文停用词表（扩展版）
-ZH_STOPWORDS = {
-    # 基础停用词
-    '的', '了', '和', '是', '在', '我', '有', '不', '人', '都', '一', '一个', '上', '也', '很', '到', '说', '要', '去', '你', '会', '着', '看', '好', '自己', '这', '那', '之', '与', '及', '或', '但', '而', '因为', '所以', '因此', '如果', '虽然', '由', '被', '把', '给', '让', '向', '从', '为', '对', '关于', '通过', '作为', '进行', '表示', '认为', '已经', '开始', '目前', '今年', '去年', '正在', '成为', '需要', '可以', '没有', '以及', '随着', '根据', '由于', '但是', '并且', '同时', '其中', '其他', '相关',
-    # 扩展停用词
-    '一些', '这些', '那些', '问题', '方面', '情况', '工作', '发展', '建设', '政府', '国家', '地区', '国际', '世界', '报道', '记者', '消息', '来源', '图片', '视频', '时间', '日期', '时候', '今天', '明天', '昨天', '此时', '此前', '之后', '后来', '近日', '日前', '目前', '现在', '当时', '当场', '即将', '将要', '曾经', '一度', '一直', '不断', '逐渐', '进一步', '继续', '持续', '保持', '加强', '推进', '推动', '促进', '提高', '提升', '增强', '扩大', '深化', '完善', '落实', '实现', '确保', '坚持', '维护', '保障', '服务', '管理', '监督', '检查', '调查', '研究', '分析', '总结', '介绍', '说明', '指出', '强调', '提出', '呼吁', '宣布', '发布', '签署', '达成', '举行', '召开', '访问', '会见', '会谈', '协商', '合作', '交流', '互动', '联系', '沟通', '协调', '配合', '支持', '帮助', '协助', '参与', '参加', '加入', '入选', '荣获', '获得', '取得', '完成', '结束', '启动', '开幕', '闭幕', '举办', '开展', '组织', '策划', '实施', '执行', '制定', '修订', '修改', '调整', '改革', '创新', '探索', '尝试', '努力', '奋斗', '争取', '期待', '希望', '愿望', '目标', '目的', '意义', '价值', '作用', '影响', '效果', '成果', '成绩', '业绩', '表现', '状态', '形势', '趋势', '走向', '格局', '环境', '条件', '基础', '平台', '机制', '体系', '结构', '模式', '方式', '方法', '途径', '渠道', '手段', '措施', '办法', '策略', '战略', '规划', '计划', '方案', '议程', '日程', '安排', '部署', '配置', '设置', '规定', '规则', '制度', '政策', '法律', '法规', '条例', '标准', '规范', '准则', '原则', '要求', '条件', '资格', '能力', '水平', '质量', '品质', '效率', '速度', '进度', '节奏', '规模', '范围', '领域', '行业', '产业', '市场', '企业', '公司', '机构', '单位', '部门', '团队', '组织', '群体', '个人', '人士', '专家', '学者', '官员', '领导', '代表', '成员', '群众', '公众', '市民', '居民', '游客', '观众', '读者', '用户', '客户', '消费者', '投资者', '创业者', '从业者', '劳动者', '员工', '职员', '干部', '党员', '团员', '队员', '选手', '运动员', '演员', '歌手', '作家', '艺术家', '科学家', '工程师', '医生', '护士', '教师', '学生', '儿童', '青年', '少年', '老年', '妇女', '男性', '女性', '朋友', '家人', '亲属', '同事', '同学', '同胞', '同志', '伙伴', '盟友', '对手', '敌人', '竞争者', '邻居', '市民', '国民', '公民', '人类', '人口', '人们', '人才', '人物', '人员', '人力', '人手', '人头', '人群', '人体', '人心', '人性', '人生', '人士', '人间', '人世', '人事', '人工', '人才', '人口',
-    # 数字相关
-    '一', '二', '三', '四', '五', '六', '七', '八', '九', '十', '百', '千', '万', '亿',
-    # 时间相关
-    '年', '月', '日', '时', '分', '秒', '周', '星期', '季度',
-    # 【新增】财经术语停用词（避免破碎词组）
-    '同比', '环比', '增长', '下降', '上升', '减少', '增加', '涨幅', '跌幅', '百分点',
-    '净利润', '归母', '归母净', '母净利', '归母利润', '母净利润', '利润总', '利润总额',
-    '营业', '营业收', '业收入', '营业收', '营收', '成本', '费用', '资产', '负债',
-    '股东', '权益', '每股', '收益', '现金流', '流动', '非流动', '负债率',
-    '毛利率', '净利率', '收益率', '回报率', '市盈率', '市净率',
-}
-
-# 中文精简停用词表（用于jieba分词后过滤虚词）
-ZH_STOPWORDS_SMALL = {
-    '的', '了', '和', '是', '在', '我', '有', '不', '人', '都', '也', '很', '到', '说', '要', '去', '你', '会', '着', '看', '好', '自己',
-    '这', '那', '这些', '那些', '这个', '那个', '之', '与', '及', '或', '但', '而', '因为', '所以', '因此', '如果', '即使', '虽然', '尽管',
-    '由', '被', '把', '给', '让', '向', '往', '自', '从', '到', '对', '关于', '对于', '为了', '通过', '作为', '随着', '根据', '由于', '但是',
-    '并且', '同时', '其中', '其他', '相关', '一个', '一些', '此时', '此前', '之后', '后来', '近日', '日前', '目前', '现在', '当时', '当场',
-    '即将', '将要', '曾经', '一度', '一直', '不断', '逐渐', '进一步', '继续', '持续', '保持', '进行', '表示', '认为', '已经', '开始',
-    '今年', '去年', '正在', '成为', '需要', '可以', '没有', '年', '月', '日', '时', '分', '秒',
-    '一', '二', '三', '四', '五', '六', '七', '八', '九', '十',
-    '们', '它', '他', '她', '地', '得', '下', '上', '中', '里', '内', '外', '间', '边', '面', '头', '部', '家', '个', '种', '类',
-    '第', '每', '各', '整', '等', '多', '大', '小', '高', '低', '长', '短', '来', '出', '起', '过', '回', '开', '放', '做', '打', '吃', '走', '跑',
-}
-
-# 英文停用词表（扩展版）
-EN_STOPWORDS = {
-    'the', 'be', 'to', 'of', 'and', 'a', 'in', 'that', 'have', 'i', 'it', 'for', 'not', 'on', 'with', 'he', 'as', 'you', 'do', 'at', 'this', 'but', 'his', 'by', 'from', 'they', 'we', 'say', 'her', 'she', 'or', 'an', 'will', 'my', 'one', 'all', 'would', 'there', 'their', 'what', 'so', 'up', 'out', 'if', 'about', 'who', 'get', 'which', 'go', 'me', 'when', 'make', 'can', 'like', 'time', 'no', 'just', 'him', 'know', 'take', 'people', 'into', 'year', 'your', 'good', 'some', 'could', 'them', 'see', 'other', 'than', 'then', 'now', 'look', 'only', 'come', 'its', 'over', 'think', 'also', 'back', 'after', 'use', 'two', 'how', 'our', 'work', 'first', 'well', 'way', 'even', 'new', 'want', 'because', 'any', 'these', 'give', 'day', 'most', 'us', 'is', 'was', 'are', 'were', 'been', 'has', 'had', 'did', 'does', 'doing', 'done',
-}
-
-# 【新增】财经术语模式（用于过滤破碎词组）
-FINANCIAL_PATTERNS = [
-    r'归母净利润',
-    r'同比增长',
-    r'环比下降',
-    r'营业收入',
-    r'净利润率',
-    r'毛利率',
-    r'资产负债',
-    r'现金流',
-    r'每股收益',
-    r'市盈率',
-    r'市净率',
-    r'收益率',
-    r'回报率',
-    r'百分点',
-    r'营收增长',
-    r'利润增长',
-    r'业绩增长',
-]
-
-# 【新增】无意义短词模式（需要过滤）
-MEANLESS_PATTERNS = [
-    r'^[母归归母母净净利利润润母净归母归母净归母利润母净利润]+$',  # 破碎的财务词
-    r'^[同比比增增长长同比增比增长]+$',  # 破碎的增长词
-    r'^..$',  # 只有2个字符
-    r'^第[一二三四五六七八九十]+$',  # "第一", "第二"等
-    r'^[上下左右前后内外]+$',  # 纯方位词
-]
-
-
-def is_meaningless_phrase(phrase):
-    """
-    判断一个词组是否无意义（破碎词组或常见术语）
-    仅对完全匹配的破碎词进行过滤，避免子串误杀正常短语
-    """
-    # 检查是否是破碎的财务术语（精确匹配）
-    fragmented_terms = ['归母净', '母净利', '归母利', '母净利润', '同比增', '比增长', '环比增']
-    for term in fragmented_terms:
-        if phrase == term:
-            if phrase not in ['归母净利润', '同比增长', '环比下降', '营业收入']:
-                return True
-    
-    # 检查是否匹配无意义模式
-    for pattern in MEANLESS_PATTERNS:
-        if re.match(pattern, phrase):
-            return True
-    
-    return False
-
-
-def _lcs_length(a, b):
-    """求两个字符串的最长公共连续子串长度"""
-    m, n = len(a), len(b)
-    if m == 0 or n == 0:
-        return 0
-    max_len = 0
-    # 只需要一维DP
-    dp = [0] * (n + 1)
-    for i in range(1, m + 1):
-        prev = 0
-        for j in range(1, n + 1):
-            temp = dp[j]
-            if a[i-1] == b[j-1]:
-                dp[j] = prev + 1
-                max_len = max(max_len, dp[j])
-            else:
-                dp[j] = 0
-            prev = temp
-    return max_len
-
-
-def merge_overlapping_ngrams(ngrams_with_scores):
-    """
-    合并重叠的n-gram，保留得分最高的短语。
-    重叠判定：子串包含，或最长公共连续子串超过较短者的40%。
-    """
-    if not ngrams_with_scores:
-        return []
-    
-    # 按得分降序，然后按长度降序
-    sorted_ngrams = sorted(ngrams_with_scores, key=lambda x: (-x[1], -len(x[0])))
-    
-    merged = []
-    
-    for ngram, score, doc_freq in sorted_ngrams:
-        is_overlapping = False
-        for merged_ngram, _, _ in merged:
-            # 1. 子串包含
-            if ngram in merged_ngram or merged_ngram in ngram:
-                is_overlapping = True
-                break
-            # 2. 最长公共连续子串过长
-            lcs = _lcs_length(ngram, merged_ngram)
-            shorter = min(len(ngram), len(merged_ngram))
-            if shorter > 0 and lcs / shorter > 0.4:
-                is_overlapping = True
-                break
+    def _build_sru_response(self, query, start, maximum_records, total, records):
+        """构建标准SRU XML响应"""
+        root = ET.Element('searchRetrieveResponse')
         
-        if not is_overlapping and not is_meaningless_phrase(ngram):
-            merged.append((ngram, score, doc_freq))
-    
-    return merged
-
-
-def extract_meaningful_phrases(title, news_id, phrases_dict):
-    """
-    从中文标题中提取有意义的短语
-    纯jieba分词后按连续块组合（停用词/单字/数字为界），保证产物是原始标题的连续子串。
-    不再补充字符级n-gram，避免产生无意义碎片。
-    """
-    if not title:
-        return
-    
-    # jieba未安装时降级为字符级4-gram
-    if not _JIEBA_AVAILABLE:
-        chars = [c for c in title if '\u4e00' <= c <= '\u9fff']
-        if len(chars) < 4:
-            return
-        for n in range(6, 3, -1):
-            for i in range(len(chars) - n + 1):
-                phrase = ''.join(chars[i:i+n])
-                if is_meaningless_phrase(phrase):
-                    continue
-                if phrase.isdigit():
-                    continue
-                if re.match(r'^\d+年$|^\d+月$|^\d+日$', phrase):
-                    continue
-                if phrase not in phrases_dict:
-                    phrases_dict[phrase] = {'count': 0, 'news_ids': set(), 'length': n}
-                phrases_dict[phrase]['news_ids'].add(news_id)
-                phrases_dict[phrase]['count'] = len(phrases_dict[phrase]['news_ids'])
-        return
-    
-    # jieba分词后按连续块组合，确保产物在原始标题中连续出现
-    words = list(jieba.cut(title))
-    chunks = []
-    current_chunk = []
-    for w in words:
-        w = w.strip()
-        if not w:
-            continue
-        if w.isdigit():
-            if current_chunk:
-                chunks.append(current_chunk)
-                current_chunk = []
-            continue
-        if len(w) == 1 or w in ZH_STOPWORDS_SMALL or is_meaningless_phrase(w):
-            if current_chunk:
-                chunks.append(current_chunk)
-                current_chunk = []
-            continue
-        current_chunk.append(w)
-    if current_chunk:
-        chunks.append(current_chunk)
-    
-    norm_title = re.sub(r'\s+', '', title)
-    for chunk in chunks:
-        if len(chunk) < 2:
-            continue
-        # 如果整个chunk全是纯英文单词，跳过（英文有专门管道）
-        if all(re.match(r'^[a-zA-Z]+$', w) for w in chunk):
-            continue
+        ET.SubElement(root, 'version').text = '1.1'
+        ET.SubElement(root, 'numberOfRecords').text = str(total)
         
-        def _join_sub(words):
-            # 中英相邻时英文后加空格，中文相邻不加空格
-            res = words[0]
-            for w in words[1:]:
-                if re.search(r'[a-zA-Z]$', res) and re.match(r'[a-zA-Z]', w):
-                    res += ' ' + w
-                else:
-                    res += w
-            return res
+        records_elem = ET.SubElement(root, 'records')
         
-        for n in range(3, 1, -1):
-            for i in range(len(chunk) - n + 1):
-                phrase = _join_sub(chunk[i:i+n])
-                if len(phrase) < 4:
-                    continue
-                # 验证去掉空格后确实是原始标题的子串
-                if re.sub(r'\s+', '', phrase) not in norm_title:
-                    continue
-                if phrase not in phrases_dict:
-                    phrases_dict[phrase] = {'count': 0, 'news_ids': set(), 'length': n}
-                phrases_dict[phrase]['news_ids'].add(news_id)
-                phrases_dict[phrase]['count'] = len(phrases_dict[phrase]['news_ids'])
-
-
-def extract_en_phrases(title, news_id, phrases_dict):
-    """从英文标题中提取2-gram和3-gram，并验证为原始标题的连续子串"""
-    lower_title = title.lower()
-    words = re.findall(r'\b[a-zA-Z]+\b', lower_title)
-    words = [w for w in words if len(w) >= 3 and w not in EN_STOPWORDS]
-    
-    for i in range(len(words) - 1):
-        phrase = words[i] + ' ' + words[i+1]
-        if len(phrase) < 4 or phrase not in lower_title:
-            continue
-        if phrase not in phrases_dict:
-            phrases_dict[phrase] = {'count': 0, 'news_ids': set(), 'length': 2}
-        phrases_dict[phrase]['news_ids'].add(news_id)
-        phrases_dict[phrase]['count'] = len(phrases_dict[phrase]['news_ids'])
-    
-    for i in range(len(words) - 2):
-        phrase = words[i] + ' ' + words[i+1] + ' ' + words[i+2]
-        if len(phrase) < 4 or phrase not in lower_title:
-            continue
-        if phrase not in phrases_dict:
-            phrases_dict[phrase] = {'count': 0, 'news_ids': set(), 'length': 3}
-        phrases_dict[phrase]['news_ids'].add(news_id)
-        phrases_dict[phrase]['count'] = len(phrases_dict[phrase]['news_ids'])
-
-
-@app.route('/api/stats/topics', methods=['GET'])
-def get_hot_topics():
-    """
-    获取热点话题 TOP 10（直接从数据库查询）
-    
-    【说明】话题数据由爬虫任务自动维护：
-    - 每次爬取结束后立即重新聚类
-    - 数据始终与最新新闻同步
-    - 无聚类数据时返回空列表（而非降级显示）
-    """
-    try:
-        with engine.connect() as conn:
-            # 直接查询聚类结果（数据始终是最新的）
-            result = conn.execute(text("""
-                SELECT topic_id, topic_name, news_count
-                FROM hot_topics
-                WHERE is_active = TRUE
-                ORDER BY news_count DESC, last_news_time DESC
-                LIMIT 10
-            """))
+        for i, record in enumerate(records):
+            record_elem = ET.SubElement(records_elem, 'record')
+            ET.SubElement(record_elem, 'recordPosition').text = str(start + i)
             
-            topics = []
-            for row in result.fetchall():
-                topics.append({
-                    'id': row[0],
-                    'name': row[1],
-                    'count': row[2]
-                })
+            record_data = ET.SubElement(record_elem, 'recordData')
             
-            # 如果无数据，返回空列表（前端显示"暂无热点话题"）
-            if not topics:
-                print("[Topics] 无聚类数据，返回空列表")
-            
-            return jsonify(topics)
-    except Exception as e:
-        print(f"[API Error] get_hot_topics: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route('/api/topics/<int:topic_id>/news', methods=['GET'])
-def get_topic_news(topic_id):
-    """
-    获取指定话题下的所有新闻
-    用于点击热点话题后展示相关新闻
-    """
-    try:
-        max_results = request.args.get('limit', 20, type=int)
-        
-        with engine.connect() as conn:
-            # 查询话题信息
-            topic_result = conn.execute(text("""
-                SELECT topic_name, topic_keywords, news_count
-                FROM hot_topics
-                WHERE topic_id = :topic_id
-            """), {'topic_id': topic_id})
-            
-            topic_row = topic_result.fetchone()
-            if not topic_row:
-                return jsonify({"error": "Topic not found"}), 404
-            
-            topic_info = {
-                'id': topic_id,
-                'name': topic_row[0],
-                'keywords': json.loads(topic_row[1]) if topic_row[1] else [],
-                'count': topic_row[2]
-            }
-            
-            # 查询话题下的新闻
-            result = conn.execute(text("""
-                SELECT 
-                    n.news_id, n.title, n.summary, n.source_url,
-                    n.created_at, n.language, n.has_video,
-                    nt.is_representative,
-                    (SELECT country_code FROM news_countries 
-                     WHERE news_id = n.news_id AND is_primary = 1 LIMIT 1) as country
-                FROM news n
-                JOIN news_topics nt ON n.news_id = nt.news_id
-                WHERE nt.topic_id = :topic_id
-                ORDER BY nt.is_representative DESC, n.created_at DESC
-                LIMIT :limit
-            """), {'topic_id': topic_id, 'limit': max_results})
-            
-            news_list = []
-            for row in result.fetchall():
-                news_list.append({
-                    'id': row[0],
-                    'title': row[1],
-                    'summary': row[2][:200] + '...' if row[2] and len(row[2]) > 200 else (row[2] or ''),
-                    'source_url': row[3],
-                    'time': row[4].isoformat() if row[4] else '',
-                    'language': row[5],
-                    'has_video': bool(row[6]),
-                    'is_representative': bool(row[7]),
-                    'country': row[8] or ''
-                })
-            
-            return jsonify({
-                'topic': topic_info,
-                'news': news_list
+            # 构建DC元数据
+            dc = ET.SubElement(record_data, 'dc', {
+                'xmlns': 'http://purl.org/dc/elements/1.1/',
+                'xmlns:xsi': 'http://www.w3.org/2001/XMLSchema-instance'
             })
-    except Exception as e:
-        print(f"[API Error] get_topic_news: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+            
+            ET.SubElement(dc, 'title').text = html.escape(record.get('title', ''))
+            ET.SubElement(dc, 'description').text = html.escape(record.get('summary', '')[:300])
+            ET.SubElement(dc, 'identifier').text = record.get('url', '')
+            ET.SubElement(dc, 'date').text = record.get('date', '')
+            ET.SubElement(dc, 'language').text = record.get('language', 'zh')
+            
+            # 扩展字段
+            ET.SubElement(dc, 'coverage').text = record.get('country', 'unknown')
+            if record.get('has_video'):
+                ET.SubElement(dc, 'type').text = 'video'
+        
+        # 添加回显参数
+        echo = ET.SubElement(root, 'echoedSearchRetrieveRequest')
+        ET.SubElement(echo, 'version').text = '1.1'
+        ET.SubElement(echo, 'query').text = html.escape(query)
+        ET.SubElement(echo, 'startRecord').text = str(start)
+        ET.SubElement(echo, 'maximumRecords').text = str(maximum_records)
+        
+        xml_str = '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(root, encoding='unicode')
+        return Response(xml_str, mimetype='application/xml')
 
 
-# ============================================
-# 话题聚类相关函数（内聚到API模块）
-# ============================================
+# 全局搜索引擎实例
+search_engine = XMLSearchEngine()
+
 
 def extract_keywords_simple(text_content, language='zh'):
     """
@@ -951,11 +363,12 @@ def jaccard_similarity(set1, set2):
 
 def cluster_news_for_topics(news_list, similarity_threshold=0.35):
     """
-    基于TF-IDF+余弦相似度的密度种子 + 两阶段簇中心聚类
-    - 标题关键词加权（权重=3倍正文）
-    - 方法4：基于局部密度筛选簇种子，防止通用综述文当种子滚雪球
+    基于TF-IDF+余弦相似度的密度种子 + 两阶段簇中心聚类（严格版）
+    - 标题关键词加权，通用实体词权重减半
+    - 方法4：基于局部密度筛选簇种子，防止通用综述文当种子
     - 方法3：两阶段聚类（硬核高阈值聚核心 + 软边低阈值分配边缘）
-    - 话题名基于簇中心关键词组合，精确到核心实体词
+    - 话题名基于词语共现，避免数学平均导致的拼凑
+    - 反向硬校验：每篇关联新闻必须包含话题核心词的至少2个
     返回话题列表（结构与旧版保持一致）
     """
     import math
@@ -966,12 +379,19 @@ def cluster_news_for_topics(news_list, similarity_threshold=0.35):
         return []
     
     TITLE_WEIGHT = 3
-    HARD_THRESHOLD = 0.38      # 第一阶段：硬核聚类阈值
-    SOFT_THRESHOLD = 0.22      # 第二阶段：边缘分配阈值
-    DENSITY_THRESHOLD = 0.35   # 邻居密度计算阈值
-    MIN_DENSITY = 2            # 成为种子的最小邻居数
+    HARD_THRESHOLD = 0.45      # 第一阶段：硬核聚类阈值
+    SOFT_THRESHOLD = 0.30      # 第二阶段：边缘分配阈值
+    DENSITY_THRESHOLD = 0.40   # 邻居密度计算阈值
+    MIN_DENSITY = 3            # 成为种子的最小邻居数
     
-    # 分别提取标题和正文关键词，构建带权TF向量
+    def _is_good_kw(kw):
+        if kw in JUNK_WORDS or kw in ZH_JUNK_WORDS or _is_zh_junk(kw) or kw in COMMON_ENTITY_WORDS:
+            return False
+        if re.match(r'^[a-z]+$', kw) and len(kw) < 4:
+            return False
+        return True
+    
+    # 分别提取标题和正文关键词，构建带权TF向量（通用实体词权重减半）
     news_keywords = {}
     all_words = set()
     
@@ -981,9 +401,11 @@ def cluster_news_for_topics(news_list, similarity_threshold=0.35):
         
         tf = Counter()
         for w in title_kws:
-            tf[w] += TITLE_WEIGHT
+            weight = TITLE_WEIGHT * 0.5 if w in COMMON_ENTITY_WORDS else TITLE_WEIGHT
+            tf[w] += weight
         for w in content_kws:
-            tf[w] += 1
+            weight = 0.5 if w in COMMON_ENTITY_WORDS else 1
+            tf[w] += weight
         
         keywords_set = set(tf.keys())
         all_words.update(keywords_set)
@@ -1033,7 +455,7 @@ def cluster_news_for_topics(news_list, similarity_threshold=0.35):
         shared = kw_set1 & kw_set2
         count = 0
         for w in shared:
-            if w in JUNK_WORDS or w in ZH_JUNK_WORDS or _is_zh_junk(w):
+            if w in JUNK_WORDS or w in ZH_JUNK_WORDS or _is_zh_junk(w) or w in COMMON_ENTITY_WORDS:
                 continue
             if re.match(r'^[a-z]+$', w) and len(w) < 4:
                 continue
@@ -1106,50 +528,72 @@ def cluster_news_for_topics(news_list, similarity_threshold=0.35):
         else:
             orphan_news.append(news_id)
     
-    # 未分配的孤立新闻，不强行合并，各自成单篇簇（后续质量过滤会处理）
+    # 未分配的孤立新闻，不强行合并，各自成单篇簇
     for nid in orphan_news:
         clusters.append([nid])
         processed.add(nid)
     
     print(f"[Cluster] 边缘分配完成，{len(non_seeds) - len(orphan_news)} 篇分配成功，{len(orphan_news)} 篇保持独立")
     
+    # ===== 话题名生成：基于词语共现 =====
+    def _generate_topic_name(cluster):
+        """基于共现频率生成话题名，返回 (topic_name, core_keywords)"""
+        kw_freq = Counter()
+        for nid in cluster:
+            for w in news_keywords[nid]['keywords']:
+                if _is_good_kw(w):
+                    kw_freq[w] += 1
+        
+        good_kws = [w for w, c in kw_freq.most_common(20) if c >= 2]
+        if not good_kws:
+            return None, []
+        
+        # 计算共现矩阵
+        cooccur = Counter()
+        for nid in cluster:
+            article_kws = [w for w in news_keywords[nid]['keywords'] if w in good_kws]
+            for i, w1 in enumerate(article_kws):
+                for w2 in article_kws[i+1:]:
+                    if w1 != w2:
+                        pair = tuple(sorted([w1, w2]))
+                        cooccur[pair] += 1
+        
+        min_cooccur = max(2, int(len(cluster) * 0.3))
+        valid_pairs = [(pair, cnt) for pair, cnt in cooccur.items() if cnt >= min_cooccur]
+        
+        if valid_pairs:
+            valid_pairs.sort(key=lambda x: x[1], reverse=True)
+            w1, w2 = valid_pairs[0][0]
+            core_words = [w1, w2]
+            
+            # 尝试找第三个共现词
+            best_w3 = None
+            best_co = 0
+            for w in good_kws:
+                if w in (w1, w2):
+                    continue
+                cnt1 = sum(1 for nid in cluster if w in news_keywords[nid]['keywords'] and w1 in news_keywords[nid]['keywords'])
+                cnt2 = sum(1 for nid in cluster if w in news_keywords[nid]['keywords'] and w2 in news_keywords[nid]['keywords'])
+                if cnt1 >= min_cooccur and cnt2 >= min_cooccur and cnt1 + cnt2 > best_co:
+                    best_co = cnt1 + cnt2
+                    best_w3 = w
+            
+            if best_w3:
+                core_words.append(best_w3)
+                return '·'.join(core_words), core_words
+            else:
+                return f"{w1}·{w2}", core_words
+        else:
+            # 兜底：单个最高频关键词
+            return good_kws[0], [good_kws[0]]
+    
     # 生成话题信息
     topics = []
     for cluster in clusters:
-        # 统计关键词频率（用原始tf累加）
-        keyword_freq = Counter()
-        for news_id in cluster:
-            for w, cnt in news_keywords[news_id]['tf'].items():
-                keyword_freq[w] += cnt
+        topic_name, core_keywords = _generate_topic_name(cluster)
         
-        top_keywords = [kw for kw, _ in keyword_freq.most_common(10)]
-        topic_keywords = top_keywords
-        
-        def _is_good_kw(kw):
-            if kw in JUNK_WORDS or kw in ZH_JUNK_WORDS or _is_zh_junk(kw):
-                return False
-            if re.match(r'^[a-z]+$', kw) and len(kw) < 4:
-                return False
-            return True
-        
-        good_keywords = [kw for kw in topic_keywords if _is_good_kw(kw)]
-        
-        # ===== 话题名生成：优先基于簇中心关键词组合 =====
-        center = _cluster_center(cluster)
-        center_words = sorted(center.items(), key=lambda x: x[1], reverse=True)
-        good_center_words = [w for w, s in center_words if _is_good_kw(w)]
-        
-        topic_name = None
-        if good_center_words:
-            # 最多取3个核心关键词组合成话题名
-            if len(good_center_words) >= 3:
-                topic_name = f"{good_center_words[0]}·{good_center_words[1]}·{good_center_words[2]}"
-            elif len(good_center_words) >= 2:
-                topic_name = f"{good_center_words[0]}·{good_center_words[1]}"
-            else:
-                topic_name = good_center_words[0]
-        else:
-            # 兜底：用种子标题
+        # 兜底：共现失败则用标题
+        if not topic_name:
             rep_title = news_keywords[cluster[0]]['title']
             if rep_title:
                 title_clean = rep_title
@@ -1159,6 +603,13 @@ def cluster_news_for_topics(news_list, similarity_threshold=0.35):
                 title_clean = title_clean.strip()
                 if title_clean and len(title_clean) >= 6 and not re.search(r'(share|saveclick|homepage|posts|secondsplay|video)', title_clean, re.IGNORECASE):
                     topic_name = title_clean[:18] + "..." if len(title_clean) > 18 else title_clean
+            # 标题兜底时，core_keywords 用簇内 top3 高质量词
+            kw_freq = Counter()
+            for nid in cluster:
+                for w in news_keywords[nid]['keywords']:
+                    if _is_good_kw(w):
+                        kw_freq[w] += 1
+            core_keywords = [w for w, _ in kw_freq.most_common(3)]
         
         if not topic_name:
             print(f"[Topics] 丢弃簇（无法生成话题名）：{news_keywords[cluster[0]]['title'][:30]}...")
@@ -1169,6 +620,28 @@ def cluster_news_for_topics(news_list, similarity_threshold=0.35):
         if re.search(r'(share|saveclick|homepage|posts|secondsplay|seconds|play)', topic_name, re.IGNORECASE):
             print(f"[Topics] 丢弃簇（包含UI垃圾词）：'{topic_name}'")
             continue
+        
+        # ===== 反向硬校验：新闻必须包含至少2个话题核心词 =====
+        if len(core_keywords) >= 2:
+            filtered_cluster = [
+                nid for nid in cluster
+                if len(set(news_keywords[nid]['keywords']) & set(core_keywords)) >= 2
+            ]
+            if len(filtered_cluster) == 0:
+                print(f"[Topics] 丢弃簇（反向校验无通过成员）：'{topic_name}'")
+                continue
+            if len(filtered_cluster) < len(cluster):
+                print(f"[Topics] 反向校验剔除 {len(cluster) - len(filtered_cluster)} 篇不相关新闻，从 '{topic_name}' ({len(cluster)}->{len(filtered_cluster)})")
+                cluster = filtered_cluster
+        
+        # 统计最终关键词
+        keyword_freq = Counter()
+        for news_id in cluster:
+            for w, cnt in news_keywords[news_id]['tf'].items():
+                keyword_freq[w] += cnt
+        top_keywords = [kw for kw, _ in keyword_freq.most_common(10)]
+        good_keywords = [kw for kw in top_keywords if _is_good_kw(kw)]
+        
         if len(good_keywords) < 2 and len(cluster) < 2:
             print(f"[Topics] 丢弃低质量簇（仅{len(cluster)}条新闻，高质量词{len(good_keywords)}个）：'{topic_name}'")
             continue
@@ -1176,7 +649,7 @@ def cluster_news_for_topics(news_list, similarity_threshold=0.35):
         print(f"[Topics] 生成话题：'{topic_name}'（{len(cluster)}篇新闻）")
         topics.append({
             'name': topic_name,
-            'keywords': topic_keywords,
+            'keywords': top_keywords,
             'news_ids': cluster,
             'news_count': len(cluster),
             'representative_id': cluster[0]
@@ -1206,7 +679,7 @@ def update_hot_topics_internal():
         
         print(f"获取到 {len(news_list)} 篇新闻，开始聚类...")
         
-        # 聚类（使用函数默认阈值0.15）
+        # 聚类（使用函数默认阈值）
         topics = cluster_news_for_topics(news_list)
         
         if not topics:
@@ -1336,248 +809,233 @@ def get_sources():
                     "name": name,
                     "logo": logo,
                     "color": color,
-                    "type": source_type
+                    "type": source_type,
+                    "reliability": reliability
                 })
             
             return jsonify(sources)
     except Exception as e:
         print(f"[API Error] get_sources: {e}")
-        return jsonify({"error": str(e)}), 500
+        import traceback
+        traceback.print_exc()
+        return jsonify([]), 500
 
-
-@app.route('/api/categories', methods=['GET'])
-def get_categories():
+@app.route('/api/topics', methods=['GET'])
+def get_hot_topics():
     """
-    获取所有新闻分类
-    返回格式: [{"category_id": 1, "category_name": "科技", "category_code": "tech", "color_code": "#3498db"}, ...]
+    获取热点话题 TOP 10（带代表新闻详情）
+    """
+    try:
+        topics = get_topic_news()
+        return jsonify(topics)
+    except Exception as e:
+        print(f"[API Error] get_hot_topics: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify([]), 500
+
+def get_topic_news():
+    """
+    获取热点话题及代表新闻（兼容版）
     """
     try:
         with engine.connect() as conn:
+            # 获取热点话题
             result = conn.execute(text("""
-                SELECT 
-                    category_id,
-                    category_name,
-                    category_code,
-                    color_code
-                FROM categories
-                ORDER BY sort_order ASC
+                SELECT topic_id, topic_name, news_count
+                FROM hot_topics
+                WHERE is_active = TRUE
+                ORDER BY news_count DESC, last_news_time DESC
+                LIMIT 10
             """))
             
-            categories = []
+            topics = []
             for row in result.fetchall():
-                categories.append({
-                    "category_id": row[0],
-                    "category_name": row[1],
-                    "category_code": row[2],
-                    "color_code": row[3]
+                topic_id = row[0]
+                topic_name = row[1]
+                count = row[2]
+                
+                # 查询话题下的新闻
+                result_news = conn.execute(text("""
+                    SELECT 
+                        n.news_id, n.title, n.summary, n.source_url,
+                        n.created_at, n.language, n.has_video,
+                        nt.is_representative,
+                        (SELECT country_code FROM news_countries 
+                         WHERE news_id = n.news_id AND is_primary = 1 LIMIT 1) as country
+                    FROM news n
+                    JOIN news_topics nt ON n.news_id = nt.news_id
+                    WHERE nt.topic_id = :topic_id
+                    ORDER BY nt.is_representative DESC, n.created_at DESC
+                    LIMIT :limit
+                """), {'topic_id': topic_id, 'limit': 20})
+                
+                news_list = []
+                for news_row in result_news.fetchall():
+                    news_list.append({
+                        'id': news_row[0],
+                        'title': news_row[1],
+                        'summary': news_row[2],
+                        'url': news_row[3],
+                        'date': news_row[4].isoformat() if news_row[4] else None,
+                        'language': news_row[5],
+                        'has_video': bool(news_row[6]),
+                        'is_representative': bool(news_row[7]),
+                        'country': news_row[8] or 'unknown'
+                    })
+                
+                topics.append({
+                    'id': topic_id,
+                    'name': topic_name,
+                    'count': count,
+                    'news': news_list
                 })
             
-            return jsonify(categories)
+            return topics
     except Exception as e:
-        print(f"[API Error] get_categories: {e}")
-        return jsonify({"error": str(e)}), 500
+        print(f"[API Error] get_topic_news: {e}")
+        import traceback
+        traceback.print_exc()
+        return []
 
+@app.route('/api/search', methods=['GET'])
+def api_search():
+    """API搜索端点"""
+    query = request.args.get('q', '')
+    start = int(request.args.get('start', 1))
+    limit = int(request.args.get('limit', 20))
+    sort = request.args.get('sort', 'relevance')
+    
+    if not query:
+        return jsonify({'error': '缺少查询参数 q'}), 400
+    
+    try:
+        xml_response = search_engine.search(query, start, limit, sort)
+        return Response(xml_response.get_data(as_text=True), mimetype='application/xml')
+    except Exception as e:
+        print(f"[API Error] api_search: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
 
-@app.route('/api/news/category/<category_code>', methods=['GET'])
-def get_news_by_category(category_code):
+@app.route('/sru', methods=['GET'])
+def sru_search():
+    """标准SRU搜索端点"""
+    query = request.args.get('query', '')
+    start = int(request.args.get('startRecord', 1))
+    limit = int(request.args.get('maximumRecords', 20))
+    sort = request.args.get('sortKeys', 'relevance')
+    
+    if not query:
+        root = ET.Element('searchRetrieveResponse')
+        ET.SubElement(root, 'version').text = '1.1'
+        diag = ET.SubElement(root, 'diagnostics')
+        ET.SubElement(diag, 'message').text = 'Missing query parameter'
+        xml_str = '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(root, encoding='unicode')
+        return Response(xml_str, mimetype='application/xml', status=400)
+    
+    try:
+        return search_engine.search(query, start, limit, sort)
+    except Exception as e:
+        print(f"[API Error] sru_search: {e}")
+        import traceback
+        traceback.print_exc()
+        root = ET.Element('searchRetrieveResponse')
+        ET.SubElement(root, 'version').text = '1.1'
+        diag = ET.SubElement(root, 'diagnostics')
+        ET.SubElement(diag, 'message').text = str(e)
+        xml_str = '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(root, encoding='unicode')
+        return Response(xml_str, mimetype='application/xml', status=500)
+
+@app.route('/api/dashboard', methods=['GET'])
+def get_dashboard():
     """
-    获取指定分类下的最新新闻
-    返回格式: [{"id": 123, "title": "...", "summary": "...", "time": "...", "country": "CN"}, ...]
+    获取Dashboard数据
     """
     try:
         with engine.connect() as conn:
-            # 获取分类ID
-            cat_result = conn.execute(
-                text("SELECT category_id FROM categories WHERE category_code = :code"),
-                {'code': category_code}
-            ).fetchone()
+            # 1. 国家分布（Top10）
+            country_result = conn.execute(text("""
+                SELECT country_code, COUNT(*) as cnt
+                FROM news_countries
+                WHERE news_id IN (SELECT news_id FROM news WHERE is_active = TRUE AND created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR))
+                AND is_primary = 1
+                GROUP BY country_code
+                ORDER BY cnt DESC
+                LIMIT 10
+            """))
+            countries = []
+            for row in country_result.fetchall():
+                countries.append({
+                    'code': row[0],
+                    'count': row[1]
+                })
             
-            if not cat_result:
-                return jsonify({"error": "Category not found"}), 404
-            
-            category_id = cat_result[0]
-            
-            # 获取该分类下的新闻
-            result = conn.execute(text("""
+            # 2. 24小时趋势（按小时统计）
+            trend_result = conn.execute(text("""
                 SELECT 
-                    n.news_id,
-                    n.title,
-                    n.summary,
-                    n.created_at,
-                    nc.country_code
+                    DATE_FORMAT(created_at, '%Y-%m-%d %H:00') as hour,
+                    COUNT(*) as cnt
+                FROM news
+                WHERE created_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)
+                GROUP BY hour
+                ORDER BY hour
+            """))
+            trends = []
+            for row in trend_result.fetchall():
+                trends.append({
+                    'hour': row[0],
+                    'count': row[1]
+                })
+            
+            # 3. 最新新闻（Top20）
+            latest_result = conn.execute(text("""
+                SELECT 
+                    n.news_id, n.title, n.summary, n.source_url,
+                    n.created_at, n.language, n.has_video,
+                    s.source_name,
+                    (SELECT country_code FROM news_countries 
+                     WHERE news_id = n.news_id AND is_primary = 1 LIMIT 1) as country
                 FROM news n
-                JOIN news_categories ncat ON n.news_id = ncat.news_id
-                LEFT JOIN news_countries nc ON n.news_id = nc.news_id AND nc.is_primary = TRUE
-                WHERE ncat.category_id = :category_id
-                  AND n.created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR)
+                JOIN sources s ON n.source_id = s.source_id
+                WHERE n.is_active = TRUE
                 ORDER BY n.created_at DESC
                 LIMIT 20
-            """), {'category_id': category_id})
-            
-            news_list = []
-            for row in result.fetchall():
-                news_list.append({
-                    "id": row[0],
-                    "title": row[1],
-                    "summary": (row[2][:200] + '...') if row[2] and len(row[2]) > 200 else (row[2] or ''),
-                    "time": row[3].strftime('%Y-%m-%d %H:%M:%S') if row[3] else None,
-                    "country": row[4] or ''
+            """))
+            latest = []
+            for row in latest_result.fetchall():
+                latest.append({
+                    'id': row[0],
+                    'title': row[1],
+                    'summary': row[2],
+                    'url': row[3],
+                    'date': row[4].isoformat() if row[4] else None,
+                    'language': row[5],
+                    'has_video': bool(row[6]),
+                    'source': row[7],
+                    'country': row[8] or 'unknown'
                 })
             
-            return jsonify(news_list)
+            return jsonify({
+                'countries': countries,
+                'trends': trends,
+                'latest': latest
+            })
     except Exception as e:
-        print(f"[API Error] get_news_by_category: {e}")
+        print(f"[API Error] get_dashboard: {e}")
         import traceback
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({'error': str(e)}), 500
 
+@app.route('/health', methods=['GET'])
+def health_check():
+    """健康检查"""
+    return jsonify({'status': 'ok', 'timestamp': datetime.now().isoformat()})
 
-@app.route('/api/news/<int:news_id>', methods=['GET'])
-def get_news_detail(news_id):
-    """
-    获取单条新闻详情（含图片、视频）
-    返回格式: {
-        "id": 123,
-        "title": "新闻标题",
-        "summary": "摘要",
-        "content": "正文内容",
-        "published_at": "2024-01-15 10:30:00",
-        "source_name": "新华网",
-        "source_url": "http://...",
-        "country_code": "CN",
-        "country_name": "中国",
-        "images": [{"url": "...", "caption": "..."}],
-        "videos": [{"url": "...", "type": "mp4"}]
-    }
-    """
-    try:
-        with engine.connect() as conn:
-            # 获取新闻基本信息
-            news_result = conn.execute(text("""
-                SELECT 
-                    n.news_id,
-                    n.title,
-                    n.summary,
-                    n.content,
-                    n.published_at,
-                    n.source_url,
-                    s.source_name,
-                    nc.country_code,
-                    c.country_name
-                FROM news n
-                LEFT JOIN sources s ON n.source_id = s.source_id
-                LEFT JOIN news_countries nc ON n.news_id = nc.news_id AND nc.is_primary = TRUE
-                LEFT JOIN countries c ON nc.country_code = c.country_code
-                WHERE n.news_id = :news_id
-                LIMIT 1
-            """), {'news_id': news_id})
-            
-            row = news_result.fetchone()
-            if not row:
-                return jsonify({"error": "News not found"}), 404
-            
-            # 构建新闻数据
-            news_data = {
-                "id": row[0],
-                "title": row[1],
-                "summary": row[2],
-                "content": row[3] or row[2] or "",
-                "published_at": row[4].strftime('%Y-%m-%d %H:%M:%S') if row[4] else None,
-                "source_url": row[5],
-                "source_name": row[6] or "未知来源",
-                "country_code": row[7],
-                "country_name": row[8]
-            }
-            
-            # 获取图片（精简版，不返回已删除的字段）
-            images_result = conn.execute(text("""
-                SELECT media_url
-                FROM media
-                WHERE news_id = :news_id AND media_type = 'image'
-                ORDER BY media_id ASC
-            """), {'news_id': news_id})
-            
-            images = []
-            for img_row in images_result.fetchall():
-                images.append({
-                    "url": img_row[0]
-                })
-            news_data["images"] = images
-            
-            # 获取视频
-            videos_result = conn.execute(text("""
-                SELECT media_url, media_type
-                FROM media
-                WHERE news_id = :news_id AND media_type = 'video'
-                ORDER BY media_id ASC
-            """), {'news_id': news_id})
-            
-            videos = []
-            for vid_row in videos_result.fetchall():
-                url = vid_row[0]
-                # 判断视频类型
-                video_type = "mp4"
-                if '.m3u8' in url.lower():
-                    video_type = "hls"
-                elif 'youtube' in url.lower() or 'youtu.be' in url.lower():
-                    video_type = "youtube"
-                elif 'bilibili' in url.lower():
-                    video_type = "bilibili"
-                elif 'player' in url.lower() or 'embed' in url.lower():
-                    video_type = "embed"
-                
-                videos.append({
-                    "url": url,
-                    "type": video_type
-                })
-            news_data["videos"] = videos
-            
-            return jsonify(news_data)
-    except Exception as e:
-        print(f"[API Error] get_news_detail: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
-
-
-# 前端路由 - 所有非 API 请求都返回 index.html（支持 React Router）
-@app.route('/', defaults={'path': ''})
-@app.route('/<path:path>')
-def serve_frontend(path):
-    """服务前端静态文件"""
-    # API 请求直接返回 404，让 Flask 处理
-    if path.startswith('api/') or path.startswith('sru') or path == 'health':
-        return jsonify({"error": "Not found"}), 404
-    
-    # 检查静态文件是否存在
-    file_path = os.path.join(STATIC_DIR, path)
-    if path and os.path.exists(file_path) and os.path.isfile(file_path):
-        return send_from_directory(STATIC_DIR, path)
-    
-    # 否则返回 index.html（让 React Router 处理前端路由）
-    index_path = os.path.join(STATIC_DIR, 'index.html')
-    if os.path.exists(index_path):
-        return send_from_directory(STATIC_DIR, 'index.html')
-    
-    # 如果没有静态文件，返回简单的 API 说明
-    return jsonify({
-        "status": "QuickNews API is running",
-        "endpoints": {
-            "health": "/health",
-            "api": "/api/*",
-            "sru": "/sru",
-            "categories": "/api/categories",
-            "country_stats": "/api/stats/countries",
-            "hot_topics": "/api/stats/topics"
-        }
-    })
-
-
-def create_app():
-    """创建 Flask 应用实例（供外部调用）"""
-    return app
-
+@app.route('/', methods=['GET'])
+def index():
+    """静态文件入口"""
+    return send_from_directory(STATIC_DIR, 'index.html')
 
 if __name__ == '__main__':
-    # 生产环境使用gunicorn: gunicorn -w 4 -b 0.0.0.0:5000 xml_api:app
-    app.run(host='0.0.0.0', port=5000, threaded=True, debug=False)
+    app.run(host='0.0.0.0', port=5000, debug=False)
