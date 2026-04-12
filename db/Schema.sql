@@ -1300,6 +1300,9 @@ BEGIN
     DELETE FROM news WHERE created_at < DATE_SUB(NOW(), INTERVAL 48 HOUR);
     SET v_deleted = ROW_COUNT();
     SELECT v_deleted AS deleted_news_count;
+    -- 在48小时清理Event中追加：
+    DELETE FROM news_topics;
+    DELETE FROM hot_topics;
 END //
 
 DELIMITER ;

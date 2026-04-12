@@ -188,14 +188,6 @@ class NewsScheduler:
             replace_existing=True
         )
         
-        # 索引补充任务：每30分钟检查一次
-        self.scheduler.add_job(
-            self.job_rebuild_missing_index,
-            IntervalTrigger(minutes=30),
-            id='index_job',
-            replace_existing=True
-        )
-        
         # 【注】热点话题聚类已合并到fetch_job中，爬取结束后立即执行
         # 无需单独定时任务，确保数据一致性
         

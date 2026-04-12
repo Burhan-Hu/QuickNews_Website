@@ -183,21 +183,4 @@ class NewsStorage:
         finally:
             conn.close()
             
-    def get_unindexed_news(self, hours=6):
-        """获取未构建索引的新闻（用于定时任务补充）"""
-        conn = self.engine.connect()
-        try:
-            results = conn.execute(
-                text("""
-                    SELECT n.news_id, n.title, n.summary, n.language
-                    FROM news n
-                    LEFT JOIN index_build_logs l ON n.news_id = l.news_id
-                    WHERE n.created_at > DATE_SUB(NOW(), INTERVAL :hours HOUR)
-                    AND l.log_id IS NULL
-                    LIMIT 100
-                """),
-                {'hours': hours}
-            ).fetchall()
-            return results
-        finally:
-            conn.close()
+    # 【移除】index_build_logs 表已废弃，改为实时索引构建，无需补充任务
