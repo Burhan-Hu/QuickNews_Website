@@ -949,12 +949,13 @@ def jaccard_similarity(set1, set2):
     union = len(set1 | set2)
     return intersection / union if union > 0 else 0.0
 
-def cluster_news_for_topics(news_list, similarity_threshold=0.28):
+def cluster_news_for_topics(news_list, similarity_threshold=0.35):
     """
-    基于TF-IDF+余弦相似度的簇中心聚类
+    基于TF-IDF+余弦相似度的密度种子 + 两阶段簇中心聚类
     - 标题关键词加权（权重=3倍正文）
-    - 簇中心聚类替代单链聚类，切断链式效应
-    - 保留高质量共享词作为兜底召回
+    - 方法4：基于局部密度筛选簇种子，防止通用综述文当种子滚雪球
+    - 方法3：两阶段聚类（硬核高阈值聚核心 + 软边低阈值分配边缘）
+    - 话题名基于簇中心关键词组合，精确到核心实体词
     返回话题列表（结构与旧版保持一致）
     """
     import math
@@ -965,6 +966,10 @@ def cluster_news_for_topics(news_list, similarity_threshold=0.28):
         return []
     
     TITLE_WEIGHT = 3
+    HARD_THRESHOLD = 0.38      # 第一阶段：硬核聚类阈值
+    SOFT_THRESHOLD = 0.22      # 第二阶段：边缘分配阈值
+    DENSITY_THRESHOLD = 0.35   # 邻居密度计算阈值
+    MIN_DENSITY = 2            # 成为种子的最小邻居数
     
     # 分别提取标题和正文关键词，构建带权TF向量
     news_keywords = {}
@@ -1019,13 +1024,11 @@ def cluster_news_for_topics(news_list, similarity_threshold=0.28):
         for mid in cluster_members:
             for w, v in vectors[mid].items():
                 center[w] += v
-        # L2归一化
         norm = sum(v ** 2 for v in center.values()) ** 0.5
         if norm > 0:
             center = {w: v / norm for w, v in center.items()}
         return center
     
-    # 辅助函数：计算高质量共享词数量
     def _quality_shared(kw_set1, kw_set2):
         shared = kw_set1 & kw_set2
         count = 0
@@ -1037,44 +1040,83 @@ def cluster_news_for_topics(news_list, similarity_threshold=0.28):
             count += 1
         return count
     
-    # 簇中心聚类
+    # ===== 方法4：计算局部密度，筛选高质量种子 =====
+    for news_id in news_keywords:
+        density = 0
+        for other_id in news_keywords:
+            if other_id == news_id:
+                continue
+            if _cosine_sim(vectors[news_id], vectors[other_id]) >= DENSITY_THRESHOLD:
+                density += 1
+        news_keywords[news_id]['density'] = density
+    
+    sorted_by_density = sorted(news_keywords.keys(), key=lambda x: news_keywords[x]['density'], reverse=True)
+    seeds = [nid for nid in sorted_by_density if news_keywords[nid]['density'] >= MIN_DENSITY]
+    
+    # 如果种子太少，动态放宽到前30%（至少3个）
+    if len(seeds) < max(3, int(len(sorted_by_density) * 0.3)):
+        seeds = sorted_by_density[:max(3, int(len(sorted_by_density) * 0.3))]
+    
+    non_seeds = [nid for nid in sorted_by_density if nid not in seeds]
+    print(f"[Cluster] 种子筛选完成：{len(seeds)} 个种子，{len(non_seeds)} 个非种子")
+    
+    # ===== 方法3：第一阶段 - 硬核聚类（仅对种子） =====
     clusters = []
     processed = set()
     
-    for seed_id in news_keywords:
+    for seed_id in seeds:
         if seed_id in processed:
             continue
         
         cluster = [seed_id]
         processed.add(seed_id)
-        seed_data = news_keywords[seed_id]
         
-        for other_id in news_keywords:
+        for other_id in seeds:
             if other_id in processed:
                 continue
-            
-            # 计算与当前簇中心的余弦相似度
             center = _cluster_center(cluster)
             sim = _cosine_sim(center, vectors[other_id])
+            shared_quality = _quality_shared(news_keywords[seed_id]['keywords'], news_keywords[other_id]['keywords'])
             
-            # 兜底：与种子直接共享高质量词>=2
-            shared_quality = _quality_shared(seed_data['keywords'], news_keywords[other_id]['keywords'])
-            
-            if sim >= similarity_threshold or shared_quality >= 2:
+            if sim >= HARD_THRESHOLD or shared_quality >= 3:
                 cluster.append(other_id)
                 processed.add(other_id)
         
-        if len(cluster) >= 1:
-            clusters.append(cluster)
+        clusters.append(cluster)
     
-    print(f"[Cluster] 原始聚类完成，共 {len(clusters)} 个簇")
+    print(f"[Cluster] 硬核聚类完成，形成 {len(clusters)} 个核心簇")
     for i, c in enumerate(clusters[:5]):
-        print(f"[Cluster]  簇{i+1}: {len(c)} 篇新闻")
+        print(f"[Cluster]  核心簇{i+1}: {len(c)} 篇")
     
-    # 生成话题信息（逻辑与旧版保持一致）
+    # ===== 方法3：第二阶段 - 边缘分配（非种子分配到最近的核心簇） =====
+    orphan_news = []
+    for news_id in non_seeds:
+        best_idx = None
+        best_sim = 0
+        for idx, cluster in enumerate(clusters):
+            center = _cluster_center(cluster)
+            sim = _cosine_sim(center, vectors[news_id])
+            if sim > best_sim:
+                best_sim = sim
+                best_idx = idx
+        
+        if best_idx is not None and best_sim >= SOFT_THRESHOLD:
+            clusters[best_idx].append(news_id)
+            processed.add(news_id)
+        else:
+            orphan_news.append(news_id)
+    
+    # 未分配的孤立新闻，不强行合并，各自成单篇簇（后续质量过滤会处理）
+    for nid in orphan_news:
+        clusters.append([nid])
+        processed.add(nid)
+    
+    print(f"[Cluster] 边缘分配完成，{len(non_seeds) - len(orphan_news)} 篇分配成功，{len(orphan_news)} 篇保持独立")
+    
+    # 生成话题信息
     topics = []
     for cluster in clusters:
-        # 统计关键词频率（用原始tf累加，更能反映话题核心）
+        # 统计关键词频率（用原始tf累加）
         keyword_freq = Counter()
         for news_id in cluster:
             for w, cnt in news_keywords[news_id]['tf'].items():
@@ -1092,31 +1134,31 @@ def cluster_news_for_topics(news_list, similarity_threshold=0.28):
         
         good_keywords = [kw for kw in topic_keywords if _is_good_kw(kw)]
         
-        # 生成话题名
-        rep_title = news_keywords[cluster[0]]['title']
+        # ===== 话题名生成：优先基于簇中心关键词组合 =====
+        center = _cluster_center(cluster)
+        center_words = sorted(center.items(), key=lambda x: x[1], reverse=True)
+        good_center_words = [w for w, s in center_words if _is_good_kw(w)]
+        
         topic_name = None
-        
-        if rep_title:
-            title_clean = rep_title
-            title_clean = re.sub(r'^[\u4e00-\u9fa5]{2,5}[：:|]', '', title_clean)
-            title_clean = re.sub(r'[_|｜][\u4e00-\u9fa5a-zA-Z]+$', '', title_clean)
-            title_clean = re.sub(r'(\d+日说|\d+日称|\d+日表示|\d+日回应|当地时间\d+日|暂无回应)$', '', title_clean)
-            title_clean = title_clean.strip()
-            
-            if title_clean and len(title_clean) >= 6 and not re.search(r'(share|saveclick|homepage|posts|secondsplay|video)', title_clean, re.IGNORECASE):
-                topic_name = title_clean[:18] + "..." if len(title_clean) > 18 else title_clean
-        
-        if not topic_name and good_keywords:
-            filtered_keywords = []
-            for kw in good_keywords[:5]:
-                if re.match(r'^[a-z]+$', kw) and len(kw) > 8:
-                    continue
-                filtered_keywords.append(kw)
-            
-            if len(filtered_keywords) >= 2:
-                topic_name = f"{filtered_keywords[0]}·{filtered_keywords[1]}"
-            elif filtered_keywords:
-                topic_name = filtered_keywords[0]
+        if good_center_words:
+            # 最多取3个核心关键词组合成话题名
+            if len(good_center_words) >= 3:
+                topic_name = f"{good_center_words[0]}·{good_center_words[1]}·{good_center_words[2]}"
+            elif len(good_center_words) >= 2:
+                topic_name = f"{good_center_words[0]}·{good_center_words[1]}"
+            else:
+                topic_name = good_center_words[0]
+        else:
+            # 兜底：用种子标题
+            rep_title = news_keywords[cluster[0]]['title']
+            if rep_title:
+                title_clean = rep_title
+                title_clean = re.sub(r'^[\u4e00-\u9fa5]{2,5}[：:|]', '', title_clean)
+                title_clean = re.sub(r'[_|｜][\u4e00-\u9fa5a-zA-Z]+$', '', title_clean)
+                title_clean = re.sub(r'(\d+日说|\d+日称|\d+日表示|\d+日回应|当地时间\d+日|暂无回应)$', '', title_clean)
+                title_clean = title_clean.strip()
+                if title_clean and len(title_clean) >= 6 and not re.search(r'(share|saveclick|homepage|posts|secondsplay|video)', title_clean, re.IGNORECASE):
+                    topic_name = title_clean[:18] + "..." if len(title_clean) > 18 else title_clean
         
         if not topic_name:
             print(f"[Topics] 丢弃簇（无法生成话题名）：{news_keywords[cluster[0]]['title'][:30]}...")
