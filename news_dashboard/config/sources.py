@@ -35,6 +35,8 @@ RSS_SOURCES = [
     
     # 国际源
     {'name': 'RT-中文', 'url': 'https://www.rt.com/rss/news/', 'lang': 'en', 'category': 'politics'},
+    {'name': 'RT-中文', 'url': 'https://rt.com/rss', 'lang': 'en', 'category': 'politics'},
+    {'name': 'RT-中文', 'url': 'https://rt.com/rss/business', 'lang': 'en', 'category': 'politics'},
     {'name': 'FoxNews-World', 'url': 'http://feeds.foxnews.com/foxnews/world','lang': 'en', 'category': 'politics','country_hint': 'US'},
     {'name': '南华早报-SCMP', 'url': 'https://feedx.net/rss/scmp.xml', 'lang': 'en', 'category': 'politics', 'country_hint': 'HK'},
     {'name': 'FoxNews-Politics', 'url': 'http://feeds.foxnews.com/foxnews/politics','lang': 'en', 'category': 'politics','country_hint': 'US'},

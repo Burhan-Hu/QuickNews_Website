@@ -25,7 +25,18 @@ class ContentProcessor:
     SOURCE_NAME_TO_ID = {
         # NewsAPI
         'NewsAPI': 1,
-        # RSS 来源（2-14 为 RSS，其中部分旧来源未启用但仍占用ID）
+        # RSS 来源（与 schema.sql 插入顺序一致）
+        '36氪': 2,
+        '虎嗅网': 3,
+        'RT-中文': 4,
+        'FoxNews-World': 5,
+        '南华早报-SCMP': 6,
+        'FoxNews-Politics': 7,
+        'ChinaDaily': 8,
+        'NewYorker': 9,
+        'AP-美联社': 10,
+        '经济日报': 11,
+        '凤凰网-军事': 12,
         'iDaily': 13,           # RSS - 每日环球视野
         'RFI-中文': 14,          # RSS - 法国国际广播电台
         # HTML 爬取来源（15-21）
