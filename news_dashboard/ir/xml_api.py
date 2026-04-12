@@ -670,12 +670,22 @@ def extract_hot_topics(news_list):
         return bonus
     
     # 收集候选短语
-    phrase_data = {}  # phrase -> {'news_ids': set, 'count': int, 'words': list, 'flags': list, 'lang': str}
+    phrase_data = {}  # phrase -> {'news_ids': set, 'count': int, 'words': list, 'flags': list, 'lang': str, 'times': list}
     all_words = Counter()
+    now = datetime.now()
     
-    for news_id, title, content, language in news_list:
+    for news_id, title, content, language, created_at in news_list:
         if not title:
             continue
+        
+        # 统一 created_at 为 datetime 对象
+        if isinstance(created_at, str):
+            try:
+                created_at = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+            except Exception:
+                created_at = now
+        if not isinstance(created_at, datetime):
+            created_at = now
         
         if language == 'zh':
             import jieba.posseg as pseg
@@ -709,9 +719,10 @@ def extract_hot_topics(news_list):
                         if phrase in JUNK_PHRASES or any(p.match(phrase) for p in JUNK_PHRASE_PATTERNS):
                             continue
                         if phrase not in phrase_data:
-                            phrase_data[phrase] = {'news_ids': set(), 'count': 0, 'words': words, 'flags': flags, 'lang': 'zh'}
+                            phrase_data[phrase] = {'news_ids': set(), 'count': 0, 'words': words, 'flags': flags, 'lang': 'zh', 'times': []}
                         phrase_data[phrase]['news_ids'].add(news_id)
                         phrase_data[phrase]['count'] = len(phrase_data[phrase]['news_ids'])
+                        phrase_data[phrase]['times'].append(created_at)
                         for w in words:
                             all_words[w] += 1
         else:
@@ -731,9 +742,10 @@ def extract_hot_topics(news_list):
                     if phrase in JUNK_PHRASES or any(p.match(phrase) for p in JUNK_PHRASE_PATTERNS):
                         continue
                     if phrase not in phrase_data:
-                        phrase_data[phrase] = {'news_ids': set(), 'count': 0, 'words': phrase_words, 'flags': None, 'lang': 'en'}
+                        phrase_data[phrase] = {'news_ids': set(), 'count': 0, 'words': phrase_words, 'flags': None, 'lang': 'en', 'times': []}
                     phrase_data[phrase]['news_ids'].add(news_id)
                     phrase_data[phrase]['count'] = len(phrase_data[phrase]['news_ids'])
+                    phrase_data[phrase]['times'].append(created_at)
                     for w in phrase_words:
                         all_words[w] += 1
     
@@ -746,7 +758,7 @@ def extract_hot_topics(news_list):
     for word, freq in all_words.items():
         idf[word] = math.log(N / (freq + 1)) + 1.0
     
-    # 计算短语得分（引入事件性加权）
+    # 计算短语得分（引入事件性加权 + 时间衰减）
     scored_phrases = []
     for phrase, data in phrase_data.items():
         doc_freq = data['count']
@@ -763,15 +775,24 @@ def extract_hot_topics(news_list):
         
         length = len(words)
         event_bonus = _get_event_bonus(words, flags, language=lang)
-        score = doc_freq * avg_idf * (1 + 0.12 * length) * event_bonus
-        scored_phrases.append((phrase, score, doc_freq, data['news_ids']))
+        
+        # 时间衰减加权：平均新闻年龄越小得分越高，范围 [0.8, 1.2]
+        times = data['times']
+        if times:
+            avg_age_hours = sum((now - t).total_seconds() for t in times) / len(times) / 3600.0
+            time_bonus = max(0.8, min(1.2, 1.2 - (0.4 * avg_age_hours / 48.0)))
+        else:
+            time_bonus = 1.0
+        
+        score = doc_freq * avg_idf * (1 + 0.12 * length) * event_bonus * time_bonus
+        scored_phrases.append((phrase, score, doc_freq, data['news_ids'], times))
     
     # LCS重叠合并（阈值25%，更严格去重）
     scored_phrases.sort(key=lambda x: x[1], reverse=True)
     merged = []
-    for phrase, score, doc_freq, news_ids in scored_phrases:
+    for phrase, score, doc_freq, news_ids, times in scored_phrases:
         is_dup = False
-        for merged_phrase, _, _, _ in merged:
+        for merged_phrase, _, _, _, _ in merged:
             if phrase in merged_phrase or merged_phrase in phrase:
                 is_dup = True
                 break
@@ -781,13 +802,13 @@ def extract_hot_topics(news_list):
                 is_dup = True
                 break
         if not is_dup:
-            merged.append((phrase, score, doc_freq, news_ids))
+            merged.append((phrase, score, doc_freq, news_ids, times))
     
     # 生成话题
     topics = []
-    for phrase, score, doc_freq, news_ids in merged[:15]:
+    for phrase, score, doc_freq, news_ids, times in merged[:15]:
         related_ids = []
-        for nid, title, _, lang in news_list:
+        for nid, title, _, lang, _ in news_list:
             if nid not in news_ids:
                 continue
             if lang == 'zh':
@@ -806,7 +827,8 @@ def extract_hot_topics(news_list):
             'keywords': [phrase],
             'news_ids': related_ids,
             'news_count': len(related_ids),
-            'representative_id': representative_id
+            'representative_id': representative_id,
+            'times': times
         })
     
     topics.sort(key=lambda x: x['news_count'], reverse=True)
@@ -819,13 +841,13 @@ def update_hot_topics_internal():
     with engine.connect() as conn:
         # 获取48小时内的新闻
         result = conn.execute(text("""
-            SELECT news_id, title, content, language
+            SELECT news_id, title, content, language, created_at
             FROM news
             WHERE created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR)
             ORDER BY created_at DESC
         """))
         
-        news_list = [(row[0], row[1], row[2] or '', row[3] or 'zh') for row in result.fetchall()]
+        news_list = [(row[0], row[1], row[2] or '', row[3] or 'zh', row[4]) for row in result.fetchall()]
         
         if len(news_list) < 2:
             print(f"新闻数量不足({len(news_list)}篇)，跳过聚类")
@@ -853,12 +875,13 @@ def update_hot_topics_internal():
         # 插入新话题
         inserted_count = 0
         for topic in topics[:15]:  # Top15
-            news_times = []
-            for nid in topic['news_ids']:
-                for n in news_list:
-                    if n[0] == nid:
-                        news_times.append(datetime.now())  # 简化处理
-                        break
+            news_times = topic.get('times', [])
+            if not news_times:
+                for nid in topic['news_ids']:
+                    for n in news_list:
+                        if n[0] == nid:
+                            news_times.append(n[4] if len(n) > 4 else datetime.now())
+                            break
             
             first_time = min(news_times) if news_times else datetime.now()
             last_time = max(news_times) if news_times else datetime.now()
