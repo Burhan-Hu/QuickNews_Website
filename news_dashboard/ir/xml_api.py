@@ -123,58 +123,157 @@ class XMLSearchEngine:
         self.engine = engine
 
     def search(self, query, start=1, maximum_records=20, sort_by='relevance'):
-        """执行SRU搜索（XML检索增强版）- 使用 inverted_index 表"""
+        """执行SRU搜索（XML检索增强版）- 兼容前端 news 格式"""
         try:
             with self.engine.connect() as conn:
-                # 预处理查询：分词
-                query_terms = self._tokenize_query(query)
-                if not query_terms:
-                    return self._empty_response(query, start, maximum_records)
-                
-                # 构建查询
-                term_list = query_terms[:5]
-                placeholders = ', '.join([f':t{i}' for i in range(len(term_list))])
-                
-                sql = f"""
-                    SELECT 
-                        n.news_id,
-                        n.xml_content,
-                        n.title,
-                        n.created_at,
-                        SUM(ii.tf_weight) as score,
-                        COUNT(DISTINCT ii.term) as match_count
-                    FROM inverted_index ii
-                    JOIN news n ON ii.news_id = n.news_id
-                    WHERE ii.term IN ({placeholders})
-                      AND ii.language = :lang
-                      AND n.created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR)
-                    GROUP BY n.news_id
-                    HAVING match_count >= :min_match
-                    ORDER BY score DESC, n.created_at DESC
-                    LIMIT :limit OFFSET :offset
-                """
-                
-                params = {f't{i}': t for i, t in enumerate(term_list)}
-                params.update({
-                    'lang': 'zh' if any('\u4e00' <= c <= '\u9fff' for c in query) else 'en',
-                    'min_match': max(1, len(term_list) * 0.5),
-                    'limit': min(maximum_records, 50),
-                    'offset': max(0, start - 1)
-                })
-                
-                result = conn.execute(text(sql), params)
-                
                 records = []
-                for row in result.fetchall():
-                    records.append({
-                        'id': row[0],
-                        'xml': row[1],
-                        'title': row[2],
-                        'summary': '',
-                        'url': '',
-                        'score': row[4],
-                        'time': row[3]
+                clean_query = (query or '').strip()
+                
+                if clean_query == '*':
+                    # 返回最新新闻（按入库时间排序）
+                    sql = """
+                        SELECT 
+                            n.news_id, n.title, n.summary, n.source_url,
+                            n.created_at, n.language, n.has_video,
+                            nc.country_code
+                        FROM news n
+                        LEFT JOIN news_countries nc ON n.news_id = nc.news_id AND nc.is_primary = 1
+                        ORDER BY n.created_at DESC
+                        LIMIT :limit OFFSET :offset
+                    """
+                    result = conn.execute(text(sql), {
+                        'limit': min(maximum_records, 50),
+                        'offset': max(0, start - 1)
                     })
+                    for row in result.fetchall():
+                        records.append({
+                            'id': row[0],
+                            'title': row[1] or '',
+                            'summary': row[2] or '',
+                            'url': row[3] or '',
+                            'date': row[4].isoformat() if row[4] else '',
+                            'language': row[5] or 'zh',
+                            'has_video': bool(row[6]),
+                            'country': row[7] or 'unknown'
+                        })
+                
+                elif clean_query.lower().startswith('country:'):
+                    # 按国家精确筛选
+                    country_code = clean_query.split(':', 1)[1].strip().upper()
+                    sql = """
+                        SELECT 
+                            n.news_id, n.title, n.summary, n.source_url,
+                            n.created_at, n.language, n.has_video,
+                            nc.country_code
+                        FROM news n
+                        JOIN news_countries nc ON n.news_id = nc.news_id
+                        WHERE nc.country_code = :code
+                        ORDER BY n.created_at DESC
+                        LIMIT :limit OFFSET :offset
+                    """
+                    result = conn.execute(text(sql), {
+                        'code': country_code,
+                        'limit': min(maximum_records, 50),
+                        'offset': max(0, start - 1)
+                    })
+                    for row in result.fetchall():
+                        records.append({
+                            'id': row[0],
+                            'title': row[1] or '',
+                            'summary': row[2] or '',
+                            'url': row[3] or '',
+                            'date': row[4].isoformat() if row[4] else '',
+                            'language': row[5] or 'zh',
+                            'has_video': bool(row[6]),
+                            'country': row[7] or 'unknown'
+                        })
+                
+                elif clean_query.lower().startswith('title:'):
+                    # 按标题模糊搜索
+                    title_query = clean_query.split(':', 1)[1].strip()
+                    sql = """
+                        SELECT 
+                            n.news_id, n.title, n.summary, n.source_url,
+                            n.created_at, n.language, n.has_video,
+                            (SELECT country_code FROM news_countries 
+                             WHERE news_id = n.news_id AND is_primary = 1 LIMIT 1) as country
+                        FROM news n
+                        WHERE n.title LIKE :q
+                        ORDER BY n.created_at DESC
+                        LIMIT :limit OFFSET :offset
+                    """
+                    result = conn.execute(text(sql), {
+                        'q': f'%{title_query}%',
+                        'limit': min(maximum_records, 50),
+                        'offset': max(0, start - 1)
+                    })
+                    for row in result.fetchall():
+                        records.append({
+                            'id': row[0],
+                            'title': row[1] or '',
+                            'summary': row[2] or '',
+                            'url': row[3] or '',
+                            'date': row[4].isoformat() if row[4] else '',
+                            'language': row[5] or 'zh',
+                            'has_video': bool(row[6]),
+                            'country': row[7] or 'unknown'
+                        })
+                
+                else:
+                    # 普通关键词搜索：使用 inverted_index
+                    query_terms = self._tokenize_query(query)
+                    if not query_terms:
+                        return self._empty_response(query, start, maximum_records)
+                    
+                    term_list = query_terms[:5]
+                    placeholders = ', '.join([f':t{i}' for i in range(len(term_list))])
+                    
+                    sql = f"""
+                        SELECT 
+                            n.news_id,
+                            n.title,
+                            n.summary,
+                            n.source_url,
+                            n.created_at,
+                            n.language,
+                            n.has_video,
+                            (SELECT country_code FROM news_countries 
+                             WHERE news_id = n.news_id AND is_primary = 1 LIMIT 1) as country,
+                            SUM(ii.tf_weight) as score,
+                            COUNT(DISTINCT ii.term) as match_count
+                        FROM inverted_index ii
+                        JOIN news n ON ii.news_id = n.news_id
+                        WHERE ii.term IN ({placeholders})
+                          AND ii.language = :lang
+                          AND n.created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR)
+                        GROUP BY n.news_id
+                        HAVING match_count >= :min_match
+                        ORDER BY score DESC, n.created_at DESC
+                        LIMIT :limit OFFSET :offset
+                    """
+                    
+                    params = {f't{i}': t for i, t in enumerate(term_list)}
+                    params.update({
+                        'lang': 'zh' if any('\u4e00' <= c <= '\u9fff' for c in query) else 'en',
+                        'min_match': max(1, len(term_list) * 0.5),
+                        'limit': min(maximum_records, 50),
+                        'offset': max(0, start - 1)
+                    })
+                    
+                    result = conn.execute(text(sql), params)
+                    
+                    for row in result.fetchall():
+                        records.append({
+                            'id': row[0],
+                            'title': row[1] or '',
+                            'summary': row[2] or '',
+                            'url': row[3] or '',
+                            'date': row[4].isoformat() if row[4] else '',
+                            'language': row[5] or 'zh',
+                            'has_video': bool(row[6]),
+                            'country': row[7] or 'unknown',
+                            'score': row[8]
+                        })
                 
                 return self._build_sru_response(query, start, maximum_records, len(records), records)
                 
@@ -219,7 +318,7 @@ class XMLSearchEngine:
         return Response(ET.tostring(root, encoding='unicode'), mimetype='application/xml')
     
     def _build_sru_response(self, query, start, maximum_records, total, records):
-        """构建标准SRU XML响应"""
+        """构建兼容前端的SRU XML响应（使用 <news> 格式）"""
         root = ET.Element('searchRetrieveResponse')
         
         ET.SubElement(root, 'version').text = '1.1'
@@ -230,25 +329,28 @@ class XMLSearchEngine:
         for i, record in enumerate(records):
             record_elem = ET.SubElement(records_elem, 'record')
             ET.SubElement(record_elem, 'recordPosition').text = str(start + i)
+            ET.SubElement(record_elem, 'datestamp').text = record.get('date', '')
             
             record_data = ET.SubElement(record_elem, 'recordData')
             
-            # 构建DC元数据
-            dc = ET.SubElement(record_data, 'dc', {
-                'xmlns': 'http://purl.org/dc/elements/1.1/',
-                'xmlns:xsi': 'http://www.w3.org/2001/XMLSchema-instance'
-            })
+            # 构建兼容前端的 <news> 格式
+            news = ET.SubElement(record_data, 'news', {'id': str(record.get('id', ''))})
             
-            ET.SubElement(dc, 'title').text = html.escape(record.get('title', ''))
-            ET.SubElement(dc, 'description').text = html.escape(record.get('summary', '')[:300])
-            ET.SubElement(dc, 'identifier').text = record.get('url', '')
-            ET.SubElement(dc, 'date').text = record.get('date', '')
-            ET.SubElement(dc, 'language').text = record.get('language', 'zh')
+            title_elem = ET.SubElement(news, 'title')
+            title_elem.text = html.escape(record.get('title', ''))
             
-            # 扩展字段
-            ET.SubElement(dc, 'coverage').text = record.get('country', 'unknown')
+            summary_elem = ET.SubElement(news, 'summary')
+            summary_elem.text = html.escape(record.get('summary', '')[:300])
+            
+            metadata = ET.SubElement(news, 'metadata')
+            ET.SubElement(metadata, 'country').text = record.get('country', 'unknown')
+            
+            if record.get('url'):
+                ET.SubElement(news, 'url').text = record.get('url', '')
+            if record.get('language'):
+                ET.SubElement(news, 'language').text = record.get('language', 'zh')
             if record.get('has_video'):
-                ET.SubElement(dc, 'type').text = 'video'
+                ET.SubElement(news, 'type').text = 'video'
         
         # 添加回显参数
         echo = ET.SubElement(root, 'echoedSearchRetrieveRequest')
@@ -1117,6 +1219,80 @@ def serve_frontend(path):
             "hot_topics": "/api/topics"
         }
     })
+
+
+@app.route('/api/stats/topics', methods=['GET'])
+def get_stats_topics():
+    """
+    获取热点话题 TOP 10（简化版，供前端热力图页面使用）
+    返回格式: [{"id": 1, "name": "...", "count": 10}, ...]
+    """
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT topic_id, topic_name, news_count
+                FROM hot_topics
+                WHERE is_active = TRUE
+                ORDER BY news_count DESC, last_news_time DESC
+                LIMIT 10
+            """))
+            
+            topics = []
+            for row in result.fetchall():
+                topics.append({
+                    'id': row[0],
+                    'name': row[1],
+                    'count': row[2]
+                })
+            
+            return jsonify(topics)
+    except Exception as e:
+        print(f"[API Error] get_stats_topics: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify([]), 500
+
+
+@app.route('/api/topics/<int:topic_id>/news', methods=['GET'])
+def get_topic_news_detail(topic_id):
+    """
+    获取指定话题下的关联新闻
+    """
+    try:
+        limit = int(request.args.get('limit', 20))
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT 
+                    n.news_id, n.title, n.summary, n.source_url,
+                    n.created_at, n.language, n.has_video,
+                    nc.country_code
+                FROM news n
+                JOIN news_topics nt ON n.news_id = nt.news_id
+                LEFT JOIN news_countries nc ON n.news_id = nc.news_id AND nc.is_primary = 1
+                WHERE nt.topic_id = :topic_id
+                ORDER BY nt.is_representative DESC, n.created_at DESC
+                LIMIT :limit
+            """), {'topic_id': topic_id, 'limit': limit})
+            
+            news_list = []
+            for row in result.fetchall():
+                news_list.append({
+                    'id': row[0],
+                    'title': row[1],
+                    'summary': row[2],
+                    'url': row[3],
+                    'time': row[4].isoformat() if row[4] else '',
+                    'language': row[5],
+                    'has_video': bool(row[6]),
+                    'country': row[7] or 'unknown'
+                })
+            
+            return jsonify({'news': news_list})
+    except Exception as e:
+        print(f"[API Error] get_topic_news_detail: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'news': []}), 500
 
 
 @app.route('/health', methods=['GET'])
