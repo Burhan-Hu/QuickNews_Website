@@ -19,13 +19,13 @@ function calculateRadius(count) {
     // 0-50条：原始逻辑
     return baseRadius + (count / 100);
   } else if (count <= 250) {
-    // 50-250条：增长减半
+    // 50-250条：增长改为三分之一速率
     // 50条时半径：0.15 + 0.5 = 0.65
-    // 之后每增加200条增长1.0（即每100条增长0.5，是原来的一半）
-    return baseRadius + 0.5 + ((count - 50) / 200);
+    // 之后每增加300条增长1.0（即每100条增长0.333，是原来的三分之一）
+    return baseRadius + 0.5 + ((count - 50) / 300);
   } else {
-    // 250条以上：固定半径（250条时的值：0.15 + 0.5 + 1.0 = 1.65）
-    return 1.65;
+    // 250条以上：固定半径（250条时的值：0.15 + 0.5 + 200/300 ≈ 1.317）
+    return baseRadius + 0.5 + (200 / 300);
   }
 }
 import { OrbitControls, Stars, Html } from '@react-three/drei';
