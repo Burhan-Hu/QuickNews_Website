@@ -458,12 +458,87 @@ def _lcs_length(a, b):
             prev = temp
     return max_len
 
+# 强事件词表（正向激励）
+EVENT_WORDS = {
+    # 中文：冲突/军事/政治/外交/灾难/科技
+    '战争', '冲突', '袭击', '突袭', '偷袭', '轰炸', '打击', '制裁', '禁运',
+    '停火', '停战', '谈判', '和谈', '对话', '磋商', '协商', '斡旋',
+    '协议', '条约', '协定', '草案', '备忘录', '共识', '宣言', '声明',
+    '选举', '投票', '公投', '弹劾', '罢免', '辞职', '解职', '撤职',
+    '访问', '会晤', '会谈', '接见', '拜会', '出访', '来访', '国事访问',
+    '宣战', '入侵', '占领', '攻占', '失守', '沦陷', '解放', '收复',
+    '撤离', '撤退', '撤军', '增兵', '派兵', '出兵', '驻军', '换俘',
+    '维和', '斡旋', '调解', '调停', '仲裁', '裁决', '判决', '宣判',
+    '政变', '兵变', '革命', '变革', '改革', '改制', '变法', '维新',
+    '抗议', '示威', '游行', '集会', '请愿', '罢工', '罢课', '罢市',
+    '暴动', '骚乱', '动乱', '战乱', '动荡', '混乱', '失序',
+    '枪击', '开火', '交火', '巷战', '近战', '夜战', '伏击', '围剿',
+    '刺杀', '暗杀', '狙杀', '处决', '斩首', '绑架', '劫持', '勒索',
+    '越狱', '逃狱', '劫狱', '走私', '贩毒', '洗钱', '诈骗', '贪腐',
+    '地震', '海啸', '台风', '飓风', '龙卷风', '洪水', '洪涝', '干旱',
+    '火灾', '火警', '塌方', '坍塌', '滑坡', '泥石流', '雪崩', '溃坝',
+    '坠毁', '撞机', '空难', '海难', '沉船', '触礁', '搁浅', '相撞',
+    '疫情', '瘟疫', '病毒', '流感', '传染', '爆发', '扩散', '蔓延',
+    '疫苗', '接种', '解封', '解禁', '放开', '封锁', '隔离', '封控',
+    '破产', '倒闭', '清算', '重组', '裁员', '减薪', '罢工', '并购',
+    '收购', '兼并', '合并', '分拆', '上市', '退市', '停牌', '复牌',
+    '发射', '升空', '起飞', '着陆', '降落', '对接', '交会', '返回',
+    '探测', '勘测', '巡航', '巡视', '巡视', '航行', '试射', '演练',
+    '卫星', '飞船', '火箭', '导弹', '核弹', '核武器', '原子', '氢弹',
+    # 英文
+    'war', 'conflict', 'attack', 'strikes', 'strike', 'bombing', 'bombings',
+    'raid', 'raids', 'invasion', 'invasions', 'occupation', 'withdrawal',
+    'retreat', 'sanctions', 'ceasefire', 'truce', 'negotiations', 'talks',
+    'deal', 'deals', 'agreement', 'treaty', 'election', 'vote', 'voting',
+    'impeachment', 'resignation', 'visit', 'summit', 'meeting', 'coup',
+    'revolution', 'protest', 'protests', 'demonstration', 'demonstrations',
+    'riot', 'riots', 'unrest', 'shooting', 'shootings', 'assassination',
+    'kidnapping', 'hijacking', 'earthquake', 'tsunami', 'typhoon', 'flood',
+    'fire', 'collapse', 'crash', 'crashes', 'sinking', 'pandemic', 'outbreak',
+    'vaccine', 'lockdown', 'bankruptcy', 'layoff', 'layoffs', 'merger',
+    'acquisition', 'launch', 'landing', 'missile', 'nuclear', 'test',
+}
+
+# 直接过滤的模板/属性短语黑名单
+JUNK_PHRASES = {
+    # 中文地震/气象模板
+    '震源深度', '震级', '级地震', '余震', '北纬', '东经', '发生地震',
+    '地震震级', '地震深度', '地震烈度', '震中位置', '震中距',
+    # 中文财经模板
+    '收盘价', '开盘价', '成交额', '成交量', '市盈率', '市值',
+    '同比增长', '环比下降', '环比上涨', '同比下降', '同比增长率',
+    '摄氏度', '降水量', '降水量毫米', '最高气温', '最低气温',
+    # 通用报道模板
+    '据报道', '消息称', '采访时表示', '对此表示', '会议指出', '会议强调',
+    '会议指出', '会议强调', '会议指出', '会议要求', '会议认为',
+    '发言人表示', '发言人称', '负责人称', '负责人表示',
+    # 英文泛领域词
+    'social media', 'artificial intelligence', 'climate change',
+    'stock market', 'interest rates', 'inflation rate', 'economic growth',
+    'global economy', 'financial markets', 'exchange rate',
+    # 纯属性词
+    'population', 'unemployment rate', 'gdp growth', 'birth rate',
+    'death toll', 'life expectancy', 'average temperature',
+}
+
+# 正则黑名单
+JUNK_PHRASE_PATTERNS = [
+    re.compile(r'^\d+级$'),           # 3级、5级
+    re.compile(r'^\d+\.\d+级$'),     # 3.5级
+    re.compile(r'^第?\d+名$'),        # 第一名、第3名
+    re.compile(r'^\d+\.\d+$'),       # 纯数字如 3.5
+    re.compile(r'^[一二三四五六七八九十百]+强$'),  # 百强、十强
+    re.compile(r'^\d+年$'),           # 2024年
+    re.compile(r'^\d+月$'),           # 5月
+    re.compile(r'^\d+日$'),           # 12日
+]
+
 def extract_hot_topics(news_list):
     """
-    基于标题事件短语提取的热点话题生成（改进版）
-    - jieba词性标注约束，只保留包含命名实体的事件级短语
-    - TF-IDF加权过滤通用词组合
-    - 关联新闻 = 标题精确包含该短语的最近新闻
+    基于标题事件短语提取的热点话题生成（事件级改进版）
+    - 强化事件性约束：必须有实体+动作/事件词
+    - 引入事件性得分加权
+    - 过滤模板词和纯实体短语
     返回话题列表（结构与旧版保持一致）
     """
     import math
@@ -477,14 +552,14 @@ def extract_hot_topics(news_list):
         '发展', '推动', '促进', '加强', '推进', '提高', '提升', '增强', '扩大',
         '深化', '完善', '落实', '实现', '确保', '坚持', '维护', '保障', '服务',
         '管理', '监督', '检查', '调查', '研究', '分析', '总结', '说明', '宣布',
-        '发布', '签署', '达成', '举行', '召开', '访问', '会见', '会谈', '协商',
+        '发布', '签署', '达成', '举行', '召开', '会见', '协商',
         '合作', '交流', '互动', '联系', '沟通', '协调', '配合', '支持', '帮助',
         '协助', '参与', '参加', '加入', '入选', '荣获', '获得', '取得', '完成',
         '结束', '启动', '开幕', '闭幕', '举办', '开展', '组织', '策划', '实施',
         '执行', '制定', '修订', '修改', '调整', '改革', '创新', '探索', '尝试',
         '努力', '奋斗', '争取', '期待', '希望', '成为', '需要', '可以', '没有',
         '随着', '根据', '由于', '但是', '并且', '同时', '其中', '其他', '相关',
-        '实施', '计划', '回应', '声明', '报道', '称', '说', '谈', '访问', '谈判',
+        '实施', '计划', '回应', '声明', '报道', '称', '说', '谈', '谈判',
         '会议', '活动', '工作', '问题', '情况', '方面', '建设', '开始', '已经',
         '正在', '继续', '持续', '保持', '发生', '出现', '达到', '超过', '接近',
         '进入', '退出', '返回', '到达', '离开', '前往', '参观', '视察', '检阅',
@@ -493,9 +568,8 @@ def extract_hot_topics(news_list):
         '操办', '筹办', '兴办', '复办', '停办', '撤办', '创建', '创办', '创立',
         '建立', '树立', '设立', '设置', '开设', '开办', '撤销', '取消', '废除',
         '废止', '停止', '终止', '中止', '暂停', '中断', '间断', '连续', '陆续',
-        '延续', '延长', '延展', '延伸', '蔓延', '延续', '沿袭', '因袭', '承袭',
-        '世袭', '传袭', '抄袭', '剽袭', '侵袭', '袭击', '偷袭', '突袭', '奇袭',
-        '空袭', '夜袭', '袭扰', '袭取', '袭占', '袭来', '逆袭', '反袭', '回击',
+        '延续', '延长', '延展', '延伸', '蔓延', '沿袭', '因袭', '承袭',
+        '世袭', '传袭', '抄袭', '剽袭', '侵袭', '袭来', '逆袭', '反袭', '回击',
         '还击', '反击', '反攻', '反扑', '反制', '反抗', '反对', '反驳', '反诘',
         '反问', '反诉', '反告', '反咬', '反噬', '反馈', '反应', '反映', '反响',
         '回答', '答复', '回复', '批复', '批答', '答批', '核批', '审批', '报批',
@@ -513,24 +587,90 @@ def extract_hot_topics(news_list):
         '漠视', '无视', '蔑视', '藐视', '小视', '鄙视', '歧视', '敌视', '仇视',
     }
     
-    def _is_valid_phrase(words, flags):
-        """验证短语的词性是否构成有效事件"""
-        # 必须至少包含1个命名实体
-        has_entity = any(f.startswith(('nr', 'ns', 'nt', 'nz', 'j')) for f in flags)
-        if not has_entity:
-            return False
-        # 通用动词不能超过1个
-        verb_count = sum(1 for w, f in zip(words, flags) if w in common_verbs or f.startswith('v'))
-        if verb_count > 1:
-            return False
-        # 不能全是虚词/形容词/副词/数词/量词
-        content_count = sum(1 for f in flags if not f.startswith(('d', 'p', 'c', 'u', 'e', 'y', 'o', 'm', 'q', 'a')))
-        if content_count < 1:
-            return False
-        return True
+    # 中文职务词（用于过滤纯职务+人名）
+    ZH_TITLES = {'总统', '总理', '首相', '主席', '总书记', '部长', '外长', '防长',
+                 '国务卿', '财长', '国防部长', '外交部长', '总统候选人', '副总统',
+                 '议长', '省长', '市长', '县长', '州长', '省长', '委员长', '主任',
+                 '书记', '局长', '厅长', '司长', '处长', '科长', '队长', '所长',
+                 '院长', '校长', '厂长', '经理', '董事长', '总裁', 'ceo', 'cfo'}
+    
+    def _is_valid_phrase(words, flags, language='zh'):
+        """验证短语是否构成有效新闻事件"""
+        if language == 'zh':
+            # 必须至少包含1个命名实体
+            has_entity = any(f.startswith(('nr', 'ns', 'nt', 'nz', 'j', 'nrt')) for f in flags)
+            if not has_entity:
+                return False
+            
+            # 必须包含事件迹象：动词（非通用动词）或 EVENT_WORDS
+            has_event = any(
+                (f.startswith('v') and w not in common_verbs) or w in EVENT_WORDS
+                for w, f in zip(words, flags)
+            )
+            if not has_event:
+                return False
+            
+            # 通用动词不能超过1个
+            verb_count = sum(1 for w, f in zip(words, flags)
+                             if w in common_verbs or (f.startswith('v') and w not in EVENT_WORDS))
+            if verb_count > 1:
+                return False
+            
+            # 不能全是虚词/形容词/副词/数词/量词
+            content_count = sum(1 for f in flags if not f.startswith(('d', 'p', 'c', 'u', 'e', 'y', 'o', 'm', 'q', 'a')))
+            if content_count < 1:
+                return False
+            
+            # 过滤纯职务+人名（如"总统万斯"）
+            phrase_str = ''.join(words)
+            if len(words) == 2 and (words[0] in ZH_TITLES or phrase_str.startswith('总统') or phrase_str.startswith('总理')):
+                if flags[1].startswith(('nr', 'nz', 'nrt')):
+                    return False
+            
+            return True
+        else:
+            # 英文：必须包含至少1个 EVENT_WORDS 中的词
+            has_event = any(w in EVENT_WORDS for w in words)
+            if not has_event:
+                return False
+            
+            # 不能全是普通名词（避免 social media 这类已进黑名单的漏网之鱼）
+            content_count = sum(1 for w in words if w not in common_verbs and w not in STOP_WORDS)
+            if content_count < 1:
+                return False
+            
+            return True
+    
+    def _get_event_bonus(words, flags, language='zh'):
+        """计算短语的事件性加权得分"""
+        bonus = 1.0
+        
+        if language == 'zh':
+            # 包含强事件词
+            if any(w in EVENT_WORDS for w in words):
+                bonus += 0.6
+            
+            # 包含动作动词（非通用动词）
+            if any(f.startswith('v') and w not in common_verbs for w, f in zip(words, flags)):
+                bonus += 0.3
+            
+            # 纯实体降级（所有非停用词都是实体）
+            non_stop = [(w, f) for w, f in zip(words, flags) if w not in STOP_WORDS]
+            if non_stop and all(f.startswith(('nr', 'ns', 'nt', 'nz', 'j', 'nrt')) for w, f in non_stop):
+                bonus = 0.2
+        else:
+            # 包含强事件词
+            if any(w in EVENT_WORDS for w in words):
+                bonus += 0.6
+            
+            # 纯人名/地名降级：所有词首字母大写（简单判断实体堆砌）
+            if words and all(w[0].isupper() for w in words):
+                bonus = 0.3
+        
+        return bonus
     
     # 收集候选短语
-    phrase_data = {}  # phrase -> {'news_ids': set, 'count': int}
+    phrase_data = {}  # phrase -> {'news_ids': set, 'count': int, 'words': list, 'flags': list, 'lang': str}
     all_words = Counter()
     
     for news_id, title, content, language in news_list:
@@ -557,36 +697,41 @@ def extract_hot_topics(news_list):
             for chunk in chunks:
                 if len(chunk) < 2:
                     continue
-                for n in range(min(3, len(chunk)), 1, -1):
+                for n in range(min(4, len(chunk)), 1, -1):  # 最多4-gram
                     for i in range(len(chunk) - n + 1):
                         words = [item[0] for item in chunk[i:i+n]]
                         flags = [item[1] for item in chunk[i:i+n]]
                         phrase = ''.join(words)
-                        if len(phrase) < 4:
+                        if len(phrase) < 4 or len(phrase) > 20:
                             continue
-                        if not _is_valid_phrase(words, flags):
+                        if not _is_valid_phrase(words, flags, language='zh'):
+                            continue
+                        if phrase in JUNK_PHRASES or any(p.match(phrase) for p in JUNK_PHRASE_PATTERNS):
                             continue
                         if phrase not in phrase_data:
-                            phrase_data[phrase] = {'news_ids': set(), 'count': 0}
+                            phrase_data[phrase] = {'news_ids': set(), 'count': 0, 'words': words, 'flags': flags, 'lang': 'zh'}
                         phrase_data[phrase]['news_ids'].add(news_id)
                         phrase_data[phrase]['count'] = len(phrase_data[phrase]['news_ids'])
                         for w in words:
                             all_words[w] += 1
         else:
-            # 英文：保留2-gram/3-gram，要求包含至少一个内容词
+            # 英文：保留2-gram/3-gram/4-gram
             words = re.findall(r'\b[a-zA-Z]+\b', title.lower())
             words = [w for w in words if len(w) >= 3 and w not in STOP_WORDS]
-            for n in range(3, 1, -1):
+            for n in range(4, 1, -1):
                 if len(words) < n:
                     continue
                 for i in range(len(words) - n + 1):
                     phrase_words = words[i:i+n]
                     phrase = ' '.join(phrase_words)
-                    content_words = [w for w in phrase_words if w not in common_verbs and w not in STOP_WORDS]
-                    if len(content_words) < 1:
+                    if len(phrase) > 40:
+                        continue
+                    if not _is_valid_phrase(phrase_words, None, language='en'):
+                        continue
+                    if phrase in JUNK_PHRASES or any(p.match(phrase) for p in JUNK_PHRASE_PATTERNS):
                         continue
                     if phrase not in phrase_data:
-                        phrase_data[phrase] = {'news_ids': set(), 'count': 0}
+                        phrase_data[phrase] = {'news_ids': set(), 'count': 0, 'words': phrase_words, 'flags': None, 'lang': 'en'}
                     phrase_data[phrase]['news_ids'].add(news_id)
                     phrase_data[phrase]['count'] = len(phrase_data[phrase]['news_ids'])
                     for w in phrase_words:
@@ -601,25 +746,27 @@ def extract_hot_topics(news_list):
     for word, freq in all_words.items():
         idf[word] = math.log(N / (freq + 1)) + 1.0
     
-    # 计算短语得分
+    # 计算短语得分（引入事件性加权）
     scored_phrases = []
     for phrase, data in phrase_data.items():
         doc_freq = data['count']
         if doc_freq < 2:
             continue
-        # 拆分词
-        if ' ' in phrase:
-            words = phrase.split()
-        else:
-            words = list(jieba.cut(phrase))
+        
+        words = data['words']
+        flags = data['flags']
+        lang = data['lang']
+        
         avg_idf = sum(idf.get(w, 1.0) for w in words) / len(words) if words else 1.0
-        if avg_idf < 1.3:  # 过滤通用词组合
+        if avg_idf < 1.2:  # 略微放宽通用词阈值
             continue
+        
         length = len(words)
-        score = doc_freq * avg_idf * (1 + 0.15 * length)
+        event_bonus = _get_event_bonus(words, flags, language=lang)
+        score = doc_freq * avg_idf * (1 + 0.12 * length) * event_bonus
         scored_phrases.append((phrase, score, doc_freq, data['news_ids']))
     
-    # LCS重叠合并（阈值30%）
+    # LCS重叠合并（阈值25%，更严格去重）
     scored_phrases.sort(key=lambda x: x[1], reverse=True)
     merged = []
     for phrase, score, doc_freq, news_ids in scored_phrases:
@@ -630,7 +777,7 @@ def extract_hot_topics(news_list):
                 break
             lcs = _lcs_length(phrase, merged_phrase)
             shorter = min(len(phrase), len(merged_phrase))
-            if shorter > 0 and lcs / shorter > 0.3:
+            if shorter > 0 and lcs / shorter > 0.25:
                 is_dup = True
                 break
         if not is_dup:
