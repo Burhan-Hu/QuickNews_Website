@@ -280,17 +280,9 @@ class HTMLNewsFetcher:
                     if not any(img['url'] == img_url for img in images):
                         images.append({'url': img_url, 'alt': '', 'caption': ''})
                 
-                # 2. 查找p标签内的图片（部分旧格式文章）
+                # 2. 查找p标签内的图片（支持嵌套在span等标签内）
                 for p in content_container.find_all('p'):
-                    # 检查p标签是否直接包含img（没有figure包装）
-                    p_img = p.find('img', recursive=False)
-                    if not p_img:
-                        # 尝试找直接子元素
-                        for child in p.children:
-                            if hasattr(child, 'name') and child.name == 'img':
-                                p_img = child
-                                break
-                    
+                    p_img = p.find('img')
                     if p_img:
                         src = p_img.get('src', '').strip()
                         if src:
@@ -302,6 +294,21 @@ class HTMLNewsFetcher:
                                     'alt': p_img.get('alt', ''),
                                     'caption': ''
                                 })
+                
+                # 3. 兜底：查找 content_container 内所有不在 figure/p 中的 img
+                for img in content_container.find_all('img'):
+                    # 跳过已在 figure/p 中处理的
+                    if img.find_parent(['figure', 'p']):
+                        continue
+                    src = img.get('src', '').strip()
+                    if src:
+                        img_url = urljoin(url, src)
+                        if not any(existing['url'] == img_url for existing in images):
+                            images.append({
+                                'url': img_url,
+                                'alt': img.get('alt', ''),
+                                'caption': ''
+                            })
                 
                 # 3. 排除明显的非内容图片（书籍推荐区域）
                 # 移除bookList等区域的图片
