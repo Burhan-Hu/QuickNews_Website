@@ -11,22 +11,7 @@ import json
 from collections import defaultdict
 from datetime import datetime, timedelta
 
-# 停用词（用于话题聚类）
-STOP_WORDS = {'的', '了', '在', '是', '我', '有', '和', '就', '不', '人', '都', '一', 
-            '一个', '上', '也', '很', '到', '说', '要', '去', '你', '会', '着', '没有', '看', '好', 
-            '自己', '这', '那', '这些', '那些', '这个', '那个', '之', '与', '及', '或', '但', '而', '然而', '因为',
-            '所以', '因此', '如果', '即使', '虽然', '尽管', '如此', '便', '由', '被', '把', '给', '让', '向', '往', 
-            '自', '从', '到', '关于', '对于', '为了', '为着', '除', '除了', '除去', 'the', 'be', 'to', 'of', 'and', 
-            'a', 'in', 'that', 'have', 'i', 'it', 'for', 'not', 'on', 'with', 'he', 'as', 'you', 'do', 'at', 'this',
-            'but', 'his', 'by', 'from', 'they', 'we', 'say', 'her', 'she', 'or', 'an', 'will', 'my', 'one', 'all', 
-            'would', 'there', 'their', 'what', 'so', 'up', 'out', 'if', 'about', 'who', 'get', 'which', 'go', 'me',
-            'when', 'make', 'can', 'like', 'time', 'no', 'just', 'him', 'know', 'take', 'people', 'into', 'year', 
-            'your', 'good', 'some', 'could', 'them', 'see', 'other', 'than', 'then', 'now', 'look', 'only', 'come',
-            'its', 'over', 'think', 'also', 'back', 'after', 'use', 'two', 'how', 'our', 'work', 'first', 'well',
-            'way', 'even', 'new', 'want', 'because', 'any', 'these', 'give', 'day', 'most', 'us', 'is', 'was', 'are',
-            'were', 'been', 'has', 'had', 'did', 'does',
-            # 中文经济与政治常用停用词
-            '同比', '环比', '预增', '预降', '预计', '营收', '净利润', '归母'}
+from core.stopwords import BASE_STOP_WORDS, TOPIC_STOP_WORDS
 
 # 垃圾词汇过滤（HTML元素、UI按钮、网站模板等）
 JUNK_WORDS = {
@@ -147,12 +132,11 @@ class XMLSearchEngine:
                     # 返回最新新闻（按入库时间排序）
                     sql = """
                         SELECT 
-                            n.news_id, n.title, n.summary, n.source_url,
-                            n.created_at, n.language, n.has_video,
-                            nc.country_code
-                        FROM news n
-                        LEFT JOIN news_countries nc ON n.news_id = nc.news_id AND nc.is_primary = 1
-                        ORDER BY n.created_at DESC
+                            news_id, title, summary, source_url,
+                            created_at, language, has_video,
+                            primary_country_code as country_code
+                        FROM v_news_with_country
+                        ORDER BY created_at DESC
                         LIMIT :limit OFFSET :offset
                     """
                     result = conn.execute(text(sql), {
@@ -207,13 +191,12 @@ class XMLSearchEngine:
                     title_query = clean_query.split(':', 1)[1].strip()
                     sql = """
                         SELECT 
-                            n.news_id, n.title, n.summary, n.source_url,
-                            n.created_at, n.language, n.has_video,
-                            (SELECT country_code FROM news_countries 
-                             WHERE news_id = n.news_id AND is_primary = 1 LIMIT 1) as country
-                        FROM news n
-                        WHERE n.title LIKE :q
-                        ORDER BY n.created_at DESC
+                            news_id, title, summary, source_url,
+                            created_at, language, has_video,
+                            primary_country_code as country
+                        FROM v_news_with_country
+                        WHERE title LIKE :q
+                        ORDER BY created_at DESC
                         LIMIT :limit OFFSET :offset
                     """
                     result = conn.execute(text(sql), {
@@ -314,7 +297,7 @@ class XMLSearchEngine:
         
         for word in words:
             word = word.strip().lower()
-            if not word or word in STOP_WORDS:
+            if not word or word in BASE_STOP_WORDS:
                 continue
             if len(word) >= 2:
                 terms.append(word)
@@ -428,7 +411,7 @@ def extract_keywords_simple(text_content, language='zh'):
                 continue
             if word.isdigit():
                 continue
-            if word in STOP_WORDS:
+            if word in TOPIC_STOP_WORDS:
                 continue
             if word in JUNK_WORDS:
                 continue
@@ -444,7 +427,7 @@ def extract_keywords_simple(text_content, language='zh'):
                 continue
             if not word.isalpha():  # 非纯字母（过滤数字混合）
                 continue
-            if word in STOP_WORDS:  # 停用词
+            if word in TOPIC_STOP_WORDS:  # 停用词
                 continue
             if word in JUNK_WORDS:  # 垃圾词汇
                 continue
@@ -651,7 +634,7 @@ def extract_hot_topics(news_list):
                 return False
             
             # 不能全是普通名词（避免 social media 这类已进黑名单的漏网之鱼）
-            content_count = sum(1 for w in words if w not in common_verbs and w not in STOP_WORDS)
+            content_count = sum(1 for w in words if w not in common_verbs and w not in TOPIC_STOP_WORDS)
             if content_count < 1:
                 return False
             
@@ -671,7 +654,7 @@ def extract_hot_topics(news_list):
                 bonus += 0.3
             
             # 纯实体降级（所有非停用词都是实体）
-            non_stop = [(w, f) for w, f in zip(words, flags) if w not in STOP_WORDS]
+            non_stop = [(w, f) for w, f in zip(words, flags) if w not in TOPIC_STOP_WORDS]
             if non_stop and all(f.startswith(('nr', 'ns', 'nt', 'nz', 'j', 'nrt')) for w, f in non_stop):
                 bonus = 0.2
         else:
@@ -711,7 +694,7 @@ def extract_hot_topics(news_list):
             current = []
             for w, f in words_flags:
                 w = w.strip()
-                if not w or w.isdigit() or len(w) == 1 or w in STOP_WORDS:
+                if not w or w.isdigit() or len(w) == 1 or w in TOPIC_STOP_WORDS:
                     if current:
                         chunks.append(current)
                         current = []
@@ -744,7 +727,7 @@ def extract_hot_topics(news_list):
         else:
             # 英文：保留2-gram/3-gram/4-gram
             words = re.findall(r'\b[a-zA-Z]+\b', title.lower())
-            words = [w for w in words if len(w) >= 3 and w not in STOP_WORDS]
+            words = [w for w in words if len(w) >= 3 and w not in TOPIC_STOP_WORDS]
             for n in range(4, 1, -1):
                 if len(words) < n:
                     continue
@@ -865,6 +848,12 @@ def update_hot_topics_internal():
         
         news_list = [(row[0], row[1], row[2] or '', row[3] or 'zh', row[4]) for row in result.fetchall()]
         
+        # 每轮都先清空旧话题，保证展示的是当前窗口的最新快照
+        print("清空旧话题数据...")
+        conn.execute(text("DELETE FROM news_topics"))
+        conn.execute(text("DELETE FROM hot_topics"))
+        conn.commit()
+        
         if len(news_list) < 2:
             print(f"新闻数量不足({len(news_list)}篇)，跳过聚类")
             return 0
@@ -879,14 +868,6 @@ def update_hot_topics_internal():
             return 0
         
         print(f"聚类完成，生成 {len(topics)} 个话题")
-        
-        # 清空旧话题
-        conn.execute(text("""
-            DELETE nt FROM news_topics nt
-            JOIN hot_topics ht ON nt.topic_id = ht.topic_id
-            WHERE ht.is_active = TRUE
-        """))
-        conn.execute(text("DELETE FROM hot_topics WHERE is_active = TRUE"))
         
         # 插入新话题
         inserted_count = 0
@@ -1051,15 +1032,13 @@ def get_topic_news():
                 # 查询话题下的新闻
                 result_news = conn.execute(text("""
                     SELECT 
-                        n.news_id, n.title, n.summary, n.source_url,
-                        n.created_at, n.language, n.has_video,
-                        nt.is_representative,
-                        (SELECT country_code FROM news_countries 
-                         WHERE news_id = n.news_id AND is_primary = 1 LIMIT 1) as country
-                    FROM news n
-                    JOIN news_topics nt ON n.news_id = nt.news_id
-                    WHERE nt.topic_id = :topic_id
-                    ORDER BY nt.is_representative DESC, n.created_at DESC
+                        news_id, title, summary, source_url,
+                        created_at, language, has_video,
+                        is_representative,
+                        primary_country_code as country
+                    FROM v_hot_topics_with_news
+                    WHERE topic_id = :topic_id
+                    ORDER BY is_representative DESC, created_at DESC
                     LIMIT :limit
                 """), {'topic_id': topic_id, 'limit': 20})
                 
@@ -1149,12 +1128,8 @@ def get_dashboard():
         with engine.connect() as conn:
             # 1. 国家分布（Top10）
             country_result = conn.execute(text("""
-                SELECT country_code, COUNT(*) as cnt
-                FROM news_countries
-                WHERE news_id IN (SELECT news_id FROM news WHERE created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR))
-                AND is_primary = 1
-                GROUP BY country_code
-                ORDER BY cnt DESC
+                SELECT country_code, news_count as cnt
+                FROM v_country_stats_48h
                 LIMIT 10
             """))
             countries = []
@@ -1184,14 +1159,12 @@ def get_dashboard():
             # 3. 最新新闻（Top20）
             latest_result = conn.execute(text("""
                 SELECT 
-                    n.news_id, n.title, n.summary, n.source_url,
-                    n.created_at, n.language, n.has_video,
-                    s.source_name,
-                    (SELECT country_code FROM news_countries 
-                     WHERE news_id = n.news_id AND is_primary = 1 LIMIT 1) as country
-                FROM news n
-                JOIN sources s ON n.source_id = s.source_id
-                ORDER BY n.created_at DESC
+                    news_id, title, summary, source_url,
+                    created_at, language, has_video,
+                    source_name,
+                    primary_country_code as country
+                FROM v_news_with_country
+                ORDER BY created_at DESC
                 LIMIT 20
             """))
             latest = []
@@ -1230,15 +1203,8 @@ def get_country_stats():
     try:
         with engine.connect() as conn:
             result = conn.execute(text("""
-                SELECT 
-                    nc.country_code,
-                    COUNT(DISTINCT nc.news_id) as news_count
-                FROM news_countries nc
-                JOIN news n ON nc.news_id = n.news_id
-                WHERE n.created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR)
-                  AND nc.is_primary = TRUE
-                GROUP BY nc.country_code
-                ORDER BY news_count DESC
+                SELECT country_code, news_count
+                FROM v_country_stats_48h
             """))
             stats = {}
             for row in result.fetchall():
@@ -1449,14 +1415,12 @@ def get_topic_news_detail(topic_id):
         with engine.connect() as conn:
             result = conn.execute(text("""
                 SELECT 
-                    n.news_id, n.title, n.summary, n.source_url,
-                    n.created_at, n.language, n.has_video,
-                    nc.country_code
-                FROM news n
-                JOIN news_topics nt ON n.news_id = nt.news_id
-                LEFT JOIN news_countries nc ON n.news_id = nc.news_id AND nc.is_primary = 1
-                WHERE nt.topic_id = :topic_id
-                ORDER BY nt.is_representative DESC, n.created_at DESC
+                    news_id, title, summary, source_url,
+                    created_at, language, has_video,
+                    primary_country_code as country_code
+                FROM v_hot_topics_with_news
+                WHERE topic_id = :topic_id
+                ORDER BY is_representative DESC, created_at DESC
                 LIMIT :limit
             """), {'topic_id': topic_id, 'limit': limit})
             

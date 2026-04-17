@@ -779,6 +779,71 @@ FROM news n
 LEFT JOIN sources s ON n.source_id = s.source_id
 WHERE n.created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR);
 
+-- 【新增视图：v_news_with_country】封装 news + sources + 主国家查询
+-- 用途：替代高频出现的 news + sources + news_countries 子查询
+CREATE VIEW v_news_with_country AS
+SELECT 
+    n.news_id,
+    n.title,
+    n.summary,
+    n.content,
+    n.source_url,
+    n.created_at,
+    n.published_at,
+    n.language,
+    n.has_video,
+    s.source_name,
+    s.reliability_score,
+    (SELECT nc.country_code FROM news_countries nc 
+     WHERE nc.news_id = n.news_id AND nc.is_primary = 1 LIMIT 1) AS primary_country_code,
+    (SELECT c.country_name FROM news_countries nc 
+     JOIN countries c ON nc.country_code = c.country_code 
+     WHERE nc.news_id = n.news_id AND nc.is_primary = 1 LIMIT 1) AS primary_country_name,
+    (SELECT GROUP_CONCAT(c.country_name ORDER BY nc.is_primary DESC SEPARATOR ', ')
+     FROM news_countries nc JOIN countries c ON nc.country_code = c.country_code
+     WHERE nc.news_id = n.news_id) AS related_countries
+FROM news n
+LEFT JOIN sources s ON n.source_id = s.source_id;
+
+-- 【新增视图：v_hot_topics_with_news】封装热点话题 + 关联新闻
+-- 用途：替代 get_topic_news 中的多表 JOIN
+CREATE VIEW v_hot_topics_with_news AS
+SELECT 
+    ht.topic_id,
+    ht.topic_name,
+    ht.news_count,
+    ht.first_news_time,
+    ht.last_news_time,
+    n.news_id,
+    n.title,
+    n.summary,
+    n.source_url,
+    n.created_at,
+    n.language,
+    n.has_video,
+    nt.is_representative,
+    (SELECT nc.country_code FROM news_countries nc 
+     WHERE nc.news_id = n.news_id AND nc.is_primary = 1 LIMIT 1) AS primary_country_code
+FROM hot_topics ht
+JOIN news_topics nt ON ht.topic_id = nt.topic_id
+JOIN news n ON nt.news_id = n.news_id
+WHERE ht.is_active = TRUE;
+
+-- 【新增视图：v_country_stats_48h】封装48小时国家统计
+-- 用途：替代 dashboard 和 country_stats 中的重复聚合查询
+CREATE VIEW v_country_stats_48h AS
+SELECT 
+    nc.country_code,
+    c.country_name,
+    COUNT(DISTINCT nc.news_id) AS news_count
+FROM news_countries nc
+JOIN news n ON nc.news_id = n.news_id
+LEFT JOIN countries c ON nc.country_code = c.country_code
+WHERE n.created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR)
+  AND nc.is_primary = TRUE
+GROUP BY nc.country_code, c.country_name
+ORDER BY news_count DESC;
+
 -- ============================================
 -- H. 触发器（保持原有逻辑）
 -- ============================================
@@ -1299,6 +1364,12 @@ BEGIN
     SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci;
     DELETE FROM news WHERE created_at < DATE_SUB(NOW(), INTERVAL 48 HOUR);
     SET v_deleted = ROW_COUNT();
+    
+    -- 清理已没有关联新闻的孤儿话题
+    DELETE ht FROM hot_topics ht
+    LEFT JOIN news_topics nt ON ht.topic_id = nt.topic_id
+    WHERE nt.news_id IS NULL;
+    
     SELECT v_deleted AS deleted_news_count;
 
 END //
@@ -1491,12 +1562,12 @@ SELECT
 FROM news
 WHERE created_at < DATE_SUB(NOW(), INTERVAL 48 HOUR);
 
--- 方法4：查看最近插入的数据（确认fetch是否正常）
-SELECT news_id, title, source_name, created_at
+-- 方法4：查看最早数据（确认清除是否正常）
+SELECT news_id, title, created_at, published_at
 FROM news
-ORDER BY news_id DESC
+ORDER BY news_id ASC
 LIMIT 5;
-SELECT NOW();
+
 -- 方法5：查看表状态（行数、数据大小）
 SHOW TABLE STATUS LIKE 'news';
 
