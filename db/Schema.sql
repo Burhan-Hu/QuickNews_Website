@@ -1571,42 +1571,7 @@ LIMIT 5;
 -- 方法5：查看表状态（行数、数据大小）
 SHOW TABLE STATUS LIKE 'news';
 
--- 1. 插入一条"48小时前的旧新闻"（应该被清理）
-INSERT INTO news (
-    title, content, summary, source_url, source_id,
-    published_at, created_at, language, has_video, click_count
-) VALUES
-('TEST_CLEANUP_OLD_48h', '这是一条测试数据，用于验证48小时清理', '测试摘要',
- 'http://test-cleanup.com/old48h', 1,
- DATE_SUB(NOW(), INTERVAL 50 HOUR),  -- published_at 50小时前
- DATE_SUB(NOW(), INTERVAL 50 HOUR),  -- created_at 50小时前（关键！）
- 'zh', FALSE, 0);
 
--- 2. 插入一条"2小时前的新新闻"（不应该被清理）
-INSERT INTO news (
-    title, content, summary, source_url, source_id,
-    published_at, created_at, language, has_video, click_count
-) VALUES
-('TEST_CLEANUP_NEW_48 HOUR 30 MINUTE', '这是一条测试数据，用于验证保留逻辑', '测试摘要',
- 'http://test-/new2h', 1,
- DATE_SUB(NOW(),  INTERVAL 2910 MINUTE),   -- published_at 2小时前
- DATE_SUB(NOW(),  INTERVAL 2910 MINUTE),   -- created_at 2小时前
- 'zh', FALSE, 0);
--- 3. 验证插入成功
-SELECT
-    news_id, title, source_id,
-    created_at,
-    TIMESTAMPDIFF(HOUR, created_at, NOW()) as hours_ago,
-    CASE
-        WHEN created_at < DATE_SUB(NOW(), INTERVAL 48 HOUR) THEN 'WILL_BE_DELETED'
-        ELSE 'WILL_BE_KEPT'
-    END as cleanup_status
-FROM news
-WHERE title LIKE 'TEST_CLEANUP%'
-ORDER BY created_at;
-
--- 4. 手动触发清理（测试用）-- 注意：单节点DB谨慎执行
-CALL sp_cleanup_48h();
 
 -- 5. 验证清理结果
 SELECT
