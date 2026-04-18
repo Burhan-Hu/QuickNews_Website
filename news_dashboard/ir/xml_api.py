@@ -473,14 +473,6 @@ def extract_hot_topics(news_list):
             if not has_entity:
                 return False
             
-            # 必须包含事件迹象：动词（非通用动词）或 EVENT_WORDS
-            has_event = any(
-                (f.startswith('v') and w not in common_verbs) or w in EVENT_WORDS
-                for w, f in zip(words, flags)
-            )
-            if not has_event:
-                return False
-            
             # 通用动词不能超过1个
             verb_count = sum(1 for w, f in zip(words, flags)
                              if w in common_verbs or (f.startswith('v') and w not in EVENT_WORDS))
@@ -500,11 +492,6 @@ def extract_hot_topics(news_list):
             
             return True
         else:
-            # 英文：必须包含至少1个 EVENT_WORDS 中的词
-            has_event = any(w in EVENT_WORDS for w in words)
-            if not has_event:
-                return False
-            
             # 不能全是普通名词（避免 social media 这类已进黑名单的漏网之鱼）
             content_count = sum(1 for w in words if w not in common_verbs and w not in STOP_WORDS)
             if content_count < 1:
@@ -533,9 +520,8 @@ def extract_hot_topics(news_list):
             # 包含强事件词
             if any(w in EVENT_WORDS for w in words):
                 bonus += 0.6
-            
-            # 纯人名/地名降级：所有词首字母大写（简单判断实体堆砌）
-            if words and all(w[0].isupper() for w in words):
+            else:
+                # 纯实体（无事件词）降级
                 bonus = 0.3
         
         return bonus
