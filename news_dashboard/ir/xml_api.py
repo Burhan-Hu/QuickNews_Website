@@ -480,34 +480,6 @@ def extract_hot_topics(news_list):
     def _is_valid_phrase(words, flags, language='zh'):
         """验证短语是否构成有效新闻事件"""
         if language == 'zh':
-            # 必须至少包含1个命名实体
-            has_entity = any(f.startswith(('nr', 'ns', 'nt', 'nz', 'j', 'nrt')) for f in flags)
-            if not has_entity:
-                return False
-            
-            # 1-gram nz/nt 专有名词：自身即有价值，跳过 has_event 和 verb_count 检查
-            is_special_entity = (len(words) == 1 and flags[0].startswith(('nz', 'nt')) and len(words[0]) >= 3)
-            
-            if not is_special_entity:
-                # phrase 末尾如果是抽象/事务/言说动词，直接过滤（避免"中国共产党加强"）
-                # 排除 vn（名动词），避免误杀"中俄合作""经济发展"等
-                if flags[-1].startswith('v') and flags[-1] != 'vn' and words[-1] in common_verbs:
-                    return False
-                
-                # 必须包含事件迹象：动词（非通用动词）或 EVENT_WORDS
-                has_event = any(
-                    (f.startswith('v') and w not in common_verbs) or w in EVENT_WORDS
-                    for w, f in zip(words, flags)
-                )
-                if not has_event:
-                    return False
-                
-                # 通用动词不能超过1个
-                verb_count = sum(1 for w, f in zip(words, flags)
-                                 if w in common_verbs or (f.startswith('v') and w not in EVENT_WORDS))
-                if verb_count > 1:
-                    return False
-            
             # 不能全是虚词/形容词/副词/数词/量词
             content_count = sum(1 for f in flags if not f.startswith(('d', 'p', 'c', 'u', 'e', 'y', 'o', 'm', 'q', 'a')))
             if content_count < 1:
@@ -535,27 +507,25 @@ def extract_hot_topics(news_list):
     
     def _get_event_bonus(words, flags, language='zh'):
         """计算短语的事件性加权得分"""
-        bonus = 1.0
-        
         if language == 'zh':
-            # 包含强事件词
-            if any(w in EVENT_WORDS for w in words):
-                bonus += 0.6
+            has_entity = any(f.startswith(('nr', 'ns', 'nt', 'nz', 'j', 'nrt')) for f in flags)
+            has_event = any(
+                (f.startswith('v') and w not in common_verbs) or w in EVENT_WORDS
+                for w, f in zip(words, flags)
+            )
             
-            # 包含动作动词（非通用动词）
-            if any(f.startswith('v') and w not in common_verbs for w, f in zip(words, flags)):
-                bonus += 0.3
-            
-            # 纯实体降级（所有非停用词都是实体）
-            non_stop = [(w, f) for w, f in zip(words, flags) if w not in STOP_WORDS]
-            if non_stop and all(f.startswith(('nr', 'ns', 'nt', 'nz', 'j', 'nrt')) for w, f in non_stop):
-                bonus = 0.2
-        else:
-            # 包含强事件词
-            if any(w in EVENT_WORDS for w in words):
-                bonus += 0.6
+            if has_entity and has_event:
+                bonus = 1.6      # 实体+事件，最高优先级（伊朗战争）
+            elif has_entity:
+                bonus = 0.8      # 有实体但无事件（中国经济圆桌、俄外交部）
+            elif has_event:
+                bonus = 0.5      # 有事件但无实体（较少见）
             else:
-                # 纯实体（无事件词）降级
+                bonus = 0.2      # 纯普通名词组合，只有数量极高才会出现
+        else:
+            if any(w in EVENT_WORDS for w in words):
+                bonus = 1.6
+            else:
                 bonus = 0.3
         
         return bonus
@@ -596,17 +566,14 @@ def extract_hot_topics(news_list):
                 chunks.append(current)
             
             for chunk in chunks:
-                if len(chunk) == 0:
+                if len(chunk) < 2:
                     continue
-                
-                # 1-gram nz/nt 特殊处理
-                if len(chunk) == 1:
-                    w, f = chunk[0]
-                    if f.startswith(('nz', 'nt')) and len(w) >= 3:
-                        words = [w]
-                        flags = [f]
-                        phrase = w
-                        if len(phrase) > 20:
+                for n in range(min(4, len(chunk)), 1, -1):  # 最多4-gram
+                    for i in range(len(chunk) - n + 1):
+                        words = [item[0] for item in chunk[i:i+n]]
+                        flags = [item[1] for item in chunk[i:i+n]]
+                        phrase = ''.join(words)
+                        if len(phrase) < 4 or len(phrase) > 20:
                             continue
                         if not _is_valid_phrase(words, flags, language='zh'):
                             continue
@@ -619,26 +586,6 @@ def extract_hot_topics(news_list):
                         phrase_data[phrase]['times'].append(created_at)
                         for w in words:
                             all_words[w] += 1
-                    continue
-                
-                # chunk 精确匹配：不再 n-gram 滑动，直接把 chunk 整体作为一个 phrase
-                if len(chunk) >= 2:
-                    words = [item[0] for item in chunk]
-                    flags = [item[1] for item in chunk]
-                    phrase = ''.join(words)
-                    if len(phrase) < 3 or len(phrase) > 20:
-                        continue
-                    if not _is_valid_phrase(words, flags, language='zh'):
-                        continue
-                    if phrase in JUNK_PHRASES or any(p.match(phrase) for p in JUNK_PHRASE_PATTERNS):
-                        continue
-                    if phrase not in phrase_data:
-                        phrase_data[phrase] = {'news_ids': set(), 'count': 0, 'words': words, 'flags': flags, 'lang': 'zh', 'times': []}
-                    phrase_data[phrase]['news_ids'].add(news_id)
-                    phrase_data[phrase]['count'] = len(phrase_data[phrase]['news_ids'])
-                    phrase_data[phrase]['times'].append(created_at)
-                    for w in words:
-                        all_words[w] += 1
         else:
             # 英文：保留2-gram/3-gram/4-gram
             words = re.findall(r'\b[a-zA-Z]+\b', title.lower())
