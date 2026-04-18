@@ -386,6 +386,9 @@ JUNK_PHRASES = {
     'global economy', 'financial markets', 'exchange rate',
     # 纯属性词
     'population', 'birth rate','death toll', 'life expectancy', 'average temperature',
+    # 英文时间模板
+    'days ago', 'hours ago', 'weeks ago', 'months ago', 'years ago',
+    'last week', 'last month', 'last year', 'this week', 'this month',
 }
 
 # 正则黑名单
@@ -398,6 +401,7 @@ JUNK_PHRASE_PATTERNS = [
     re.compile(r'^\d+年$'),           # 2024年
     re.compile(r'^\d+月$'),           # 5月
     re.compile(r'^\d+日$'),           # 12日
+    re.compile(r'^\d+\s+(days?|hours?|weeks?|months?|years?)\s+ago$'),  # 3 days ago
 ]
 
 def extract_hot_topics(news_list):
@@ -421,16 +425,15 @@ def extract_hot_topics(news_list):
         '发展', '推动', '促进', '加强', '推进', '提高', '提升', '增强', '扩大',
         '深化', '完善', '落实', '实现', '确保', '坚持', '维护', '保障', '服务',
         # 日常事务动词
-        '管理', '监督', '检查', '调查', '研究', '分析', '总结', '说明', '办理',
-        '处理', '处置', '执行', '制定',
+        '管理', '监督', '检查', '调查', '研究', '分析','处置', '执行', '制定',
         # 言说动词
         '表示', '称', '说', '指出', '认为', '强调', '介绍', '宣布', '回应',
-        '发布', '声明', '报道', '谈',
+        '发布', '报道', '谈',
         # 协作/参与动词
-        '合作', '交流', '互动', '联系', '沟通', '协调', '配合', '支持', '帮助',
+        '交流', '联系', '沟通', '协调', '配合', '支持', '帮助',
         '协助', '参与', '参加', '加入', '入选', '荣获', '获得', '取得', '完成',
         # 状态/过程动词
-        '结束', '闭幕', '组织', '策划', '实施', '修订', '修改', '调整', '改革',
+        '结束', '组织', '策划', '实施', '修订', '修改', '调整', '改革',
         '创新', '探索', '尝试', '努力', '奋斗', '争取', '期待', '希望', '成为',
         '需要', '可以', '没有', '随着', '根据', '由于', '但是', '并且', '同时',
         '其中', '其他', '相关', '计划', '工作', '问题', '情况', '方面', '建设',
@@ -447,7 +450,7 @@ def extract_hot_topics(news_list):
         # 批/答动词
         '回答', '答复', '回复', '批复', '批答', '答批', '核批', '报批', '呈批',
         '转批', '加批', '眉批', '旁批', '朱批', '总批', '点评', '评论', '议论',
-        '讨论', '谈论', '研讨', '研判', '深究', '探究',
+        '讨论', '谈论', '研讨', '深究', '探究',
         # 侦查/勘察动词
         '侦察', '侦查', '勘察', '勘测', '勘探', '勘查', '踏勘', '校勘', '推勘',
         '查勘', '勘误', '勘正', '校正', '校对', '校核', '累计', '总计', '合计',
@@ -487,7 +490,8 @@ def extract_hot_topics(news_list):
             
             if not is_special_entity:
                 # phrase 末尾如果是抽象/事务/言说动词，直接过滤（避免"中国共产党加强"）
-                if flags[-1].startswith('v') and words[-1] in common_verbs:
+                # 排除 vn（名动词），避免误杀"中俄合作""经济发展"等
+                if flags[-1].startswith('v') and flags[-1] != 'vn' and words[-1] in common_verbs:
                     return False
                 
                 # 必须包含事件迹象：动词（非通用动词）或 EVENT_WORDS
@@ -517,7 +521,12 @@ def extract_hot_topics(news_list):
             
             return True
         else:
-            # 不能全是普通名词（避免 social media 这类已进黑名单的漏网之鱼）
+            # 必须包含至少1个 EVENT_WORDS 中的词
+            has_event = any(w in EVENT_WORDS for w in words)
+            if not has_event:
+                return False
+            
+            # 不能全是普通名词
             content_count = sum(1 for w in words if w not in common_verbs and w not in STOP_WORDS)
             if content_count < 1:
                 return False
@@ -587,14 +596,17 @@ def extract_hot_topics(news_list):
                 chunks.append(current)
             
             for chunk in chunks:
-                if len(chunk) < 2:
+                if len(chunk) == 0:
                     continue
-                for n in range(min(4, len(chunk)), 1, -1):  # 最多4-gram
-                    for i in range(len(chunk) - n + 1):
-                        words = [item[0] for item in chunk[i:i+n]]
-                        flags = [item[1] for item in chunk[i:i+n]]
-                        phrase = ''.join(words)
-                        if len(phrase) < 4 or len(phrase) > 20:
+                
+                # 1-gram nz/nt 特殊处理
+                if len(chunk) == 1:
+                    w, f = chunk[0]
+                    if f.startswith(('nz', 'nt')) and len(w) >= 3:
+                        words = [w]
+                        flags = [f]
+                        phrase = w
+                        if len(phrase) > 20:
                             continue
                         if not _is_valid_phrase(words, flags, language='zh'):
                             continue
@@ -607,6 +619,26 @@ def extract_hot_topics(news_list):
                         phrase_data[phrase]['times'].append(created_at)
                         for w in words:
                             all_words[w] += 1
+                    continue
+                
+                # chunk 精确匹配：不再 n-gram 滑动，直接把 chunk 整体作为一个 phrase
+                if len(chunk) >= 2:
+                    words = [item[0] for item in chunk]
+                    flags = [item[1] for item in chunk]
+                    phrase = ''.join(words)
+                    if len(phrase) < 3 or len(phrase) > 20:
+                        continue
+                    if not _is_valid_phrase(words, flags, language='zh'):
+                        continue
+                    if phrase in JUNK_PHRASES or any(p.match(phrase) for p in JUNK_PHRASE_PATTERNS):
+                        continue
+                    if phrase not in phrase_data:
+                        phrase_data[phrase] = {'news_ids': set(), 'count': 0, 'words': words, 'flags': flags, 'lang': 'zh', 'times': []}
+                    phrase_data[phrase]['news_ids'].add(news_id)
+                    phrase_data[phrase]['count'] = len(phrase_data[phrase]['news_ids'])
+                    phrase_data[phrase]['times'].append(created_at)
+                    for w in words:
+                        all_words[w] += 1
         else:
             # 英文：保留2-gram/3-gram/4-gram
             words = re.findall(r'\b[a-zA-Z]+\b', title.lower())
