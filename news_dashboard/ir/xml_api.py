@@ -11,69 +11,7 @@ import json
 from collections import defaultdict
 from datetime import datetime, timedelta
 
-# 停用词（用于话题聚类）
-STOP_WORDS = {'的', '了', '在', '是', '我', '有', '和', '就', '不', '人', '都', '一', 
-            '一个', '上', '也', '很', '到', '说', '要', '去', '你', '会', '着', '没有', '看', '好', 
-            '自己', '这', '那', '这些', '那些', '这个', '那个', '之', '与', '及', '或', '但', '而', '然而', '因为',
-            '所以', '因此', '如果', '即使', '虽然', '尽管', '如此', '便', '由', '被', '把', '给', '让', '向', '往', 
-            '自', '从', '到', '关于', '对于', '为了', '为着', '除', '除了', '除去', 'the', 'be', 'to', 'of', 'and', 
-            'a', 'in', 'that', 'have', 'i', 'it', 'for', 'not', 'on', 'with', 'he', 'as', 'you', 'do', 'at', 'this',
-            'but', 'his', 'by', 'from', 'they', 'we', 'say', 'her', 'she', 'or', 'an', 'will', 'my', 'one', 'all', 
-            'would', 'there', 'their', 'what', 'so', 'up', 'out', 'if', 'about', 'who', 'get', 'which', 'go', 'me',
-            'when', 'make', 'can', 'like', 'time', 'no', 'just', 'him', 'know', 'take', 'people', 'into', 'year', 
-            'your', 'good', 'some', 'could', 'them', 'see', 'other', 'than', 'then', 'now', 'look', 'only', 'come',
-            'its', 'over', 'think', 'also', 'back', 'after', 'use', 'two', 'how', 'our', 'work', 'first', 'well',
-            'way', 'even', 'new', 'want', 'because', 'any', 'these', 'give', 'day', 'most', 'us', 'is', 'was', 'are',
-            'were', 'been', 'has', 'had', 'did', 'does',
-            # 中文经济与政治常用停用词
-            '同比', '环比', '预增', '预降', '预计', '营收', '净利润', '归母'}
-
-# 垃圾词汇过滤（HTML元素、UI按钮、网站模板等）
-JUNK_WORDS = {
-    # HTML/UI元素
-    'saveclick', 'share', 'click', 'button', 'btn', 'link', 'href', 'class', 'id', 'div', 'span',
-    'homepage', 'posts', 'post', 'page', 'nav', 'menu', 'sidebar', 'footer', 'header', 'main',
-    'secondsplay', 'video', 'audio', 'image', 'img', 'svg', 'icon', 'logo', 'banner',
-    # 网站功能词汇
-    'subscribe', 'follow', 'login', 'signin', 'register', 'comment', 'reply', 'share', 'like',
-    'download', 'upload', 'search', 'more', 'read', 'view', 'click', 'tap', 'swipe',
-    # 时间格式
-    'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december',
-    'jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec',
-    'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
-    'today', 'yesterday', 'tomorrow', 'day', 'week', 'month', 'year',
-    # 常见无意义组合
-    'artemis', 'earth', 'minister', 'talks', 'said', 'says', 'report', 'reports', 'according',
-    'ap', 'reuters', 'afp', 'bbc', 'cnn', 'fox', 'news', 'breaking', 'update', 'live',
-    # 新增：更多UI残留和通用无意义词
-    'play', 'save', 'copy', 'paste', 'print', 'email', 'twitter', 'facebook', 'weibo', 'wechat',
-    'whatsapp', 'telegram', 'linkedin', 'reddit', 'pinterest', 'tumblr', 'vk', 'ok', 'qq',
-    'related', 'recommended', 'popular', 'trending', 'latest', 'featured', 'editor', 'pick',
-    'gallery', 'slideshow', 'podcast', 'newsletter', 'alert', 'notification', 'popup', 'modal',
-    'cookie', 'privacy', 'policy', 'terms', 'conditions', 'agreement', 'consent', 'gdpr',
-    'skip', 'next', 'prev', 'previous', 'back', 'forward', 'continue', 'read', 'full', 'story',
-    'expand', 'collapse', 'show', 'hide', 'toggle', 'menu', 'close', 'open', 'start', 'stop',
-    'source', 'sources', 'author', 'authors', 'editor', 'editors', 'writer', 'writers',
-    'published', 'updated', 'modified', 'created', 'posted', 'minutes', 'hours', 'ago',
-    'widget', 'module', 'component', 'block', 'section', 'container', 'wrapper', 'holder',
-}
-
-# 中文垃圾短语过滤（正则模式）
-ZH_JUNK_PATTERNS = [
-    r'^\d+日?说$', r'^\d+日?称$', r'^\d+日?表示$', r'^\d+日?回应$',
-    r'当地时间\d+', r'北京时间\d+', r'\d+月\d+日', r'\d+年\d+月',
-    r'对此暂无回应', r'暂无回应', r'乌方对此', r'俄方对此', r'美方对此', r'中方对此',
-    r'.*?新华社.*?', r'.*?央视.*?新闻.*?', r'.*?新闻网.*?',
-    r'^[一二三四五六七八九十百千万亿]+$',  # 纯数字汉字
-]
-ZH_JUNK_PATTERN = re.compile('|'.join(ZH_JUNK_PATTERNS))
-
-# 中文特定垃圾词（整词匹配）
-ZH_JUNK_WORDS = {
-    '新华社', '新华网', '央视新闻', '央视网', '人民日报', '环球时报', '界面新闻',
-    '当地时间', '北京时间', '日说', '日称', '日表示', '日回应', '暂无', '对此',
-    '报道称', '据报道', '消息称', '消息人士', '知情人士',
-}
+from core.stopwords import TOPIC_STOP_WORDS as STOP_WORDS
 
 # 通用实体词降级（国家名、通用政治词汇等，在聚类中权重降低，不计入共享词数量）
 COMMON_ENTITY_WORDS = {
@@ -89,18 +27,6 @@ COMMON_ENTITY_WORDS = {
     'countries', 'nation', 'nations', 'world', 'global', 'region', 'regional',
     'city', 'people', 'military', 'army', 'political', 'economic', 'official',
 }
-
-def _is_zh_junk(word):
-    """判断中文词是否为垃圾词"""
-    if word in ZH_JUNK_WORDS:
-        return True
-    if ZH_JUNK_PATTERN.search(word):
-        return True
-    # 过滤纯数字或数字占比过高的词
-    if sum(1 for c in word if c.isdigit()) / len(word) > 0.5:
-        return True
-    return False
-
 
 try:
     import jieba
@@ -380,77 +306,6 @@ class XMLSearchEngine:
 # 全局搜索引擎实例
 search_engine = XMLSearchEngine()
 
-
-def extract_keywords_simple(text_content, language='zh'):
-    """
-    从文本中提取关键词（增强版）
-    - 过滤HTML标签和脚本
-    - 过滤UI元素和常见垃圾词汇
-    - 过滤停用词
-    - 中文使用jieba分词（如可用），否则使用bigram fallback
-    """
-    if not text_content:
-        return set()
-    
-    # 1. 移除HTML标签和脚本内容
-    text_content = re.sub(r'<script[^>]*>.*?</script>', ' ', text_content, flags=re.DOTALL | re.IGNORECASE)
-    text_content = re.sub(r'<style[^>]*>.*?</style>', ' ', text_content, flags=re.DOTALL | re.IGNORECASE)
-    text_content = re.sub(r'<[^>]+>', ' ', text_content)  # 移除所有HTML标签
-    
-    # 2. 预清洗：移除常见UI残留组合（大小写不敏感）
-    ui_patterns = [
-        r'share[-\s]?save[-\s]?click', r'home[-\s]?page[-\s]?posts?', r'seconds[-\s]?play[-\s]?video',
-        r'save[-\s]?click', r'share[-\s]?click', r'read[-\s]?more', r'load[-\s]?more',
-        r'sign[-\s]?up', r'sign[-\s]?in', r'log[-\s]?in', r'follow[-\s]?us',
-    ]
-    for pattern in ui_patterns:
-        text_content = re.sub(pattern, ' ', text_content, flags=re.IGNORECASE)
-    
-    keywords = set()
-    
-    if language == 'zh':
-        # 中文分词：优先使用jieba
-        if _JIEBA_AVAILABLE and jieba:
-            words = jieba.lcut(text_content)
-        else:
-            # Fallback：按空格分割（兼容旧逻辑）
-            words = text_content.split()
-        
-        for word in words:
-            word = word.strip().lower()
-            if not word:
-                continue
-            # 只保留中文和英文数字
-            if not re.match(r'^[\u4e00-\u9fa5a-zA-Z0-9]+$', word):
-                continue
-            # 长度限制
-            if not (2 <= len(word) <= 12):
-                continue
-            if word.isdigit():
-                continue
-            if word in STOP_WORDS:
-                continue
-            if word in JUNK_WORDS:
-                continue
-            if _is_zh_junk(word):
-                continue
-            keywords.add(word)
-    else:
-        words = text_content.lower().split()
-        for word in words:
-            word = word.strip()
-            # 过滤条件
-            if len(word) < 3 or len(word) > 15:  # 长度限制
-                continue
-            if not word.isalpha():  # 非纯字母（过滤数字混合）
-                continue
-            if word in STOP_WORDS:  # 停用词
-                continue
-            if word in JUNK_WORDS:  # 垃圾词汇
-                continue
-            keywords.add(word)
-    
-    return keywords
 
 def _lcs_length(a, b):
     """最长公共连续子串长度"""
