@@ -662,6 +662,14 @@ def extract_hot_topics(news_list):
             if shorter > 0 and lcs / shorter > 0.25:
                 is_dup = True
                 break
+        
+        # 关联新闻完全相同则判重，保留得分高的（先出现的）
+        if not is_dup:
+            for _, _, _, existing_news_ids, _ in merged:
+                if news_ids == existing_news_ids:
+                    is_dup = True
+                    break
+        
         if not is_dup:
             merged.append((phrase, score, doc_freq, news_ids, times))
     
