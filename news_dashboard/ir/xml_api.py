@@ -22,13 +22,6 @@ ZH_JUNK_PATTERN = re.compile('|'.join([
     r'^[一二三四五六七八九十百千万亿]+$',  # 纯数字汉字
 ]))
 
-# 中文特定垃圾词（整词匹配）
-ZH_JUNK_WORDS = {
-    '新华社', '新华网', '央视新闻', '央视网', '人民日报', '环球时报', '界面新闻', '通讯社',
-    '当地时间', '北京时间', '日说', '日称', '日表示', '日回应', '暂无', '对此',
-    '报道称', '据报道', '消息称', '消息人士', '知情人士',
-}
-
 # 通用实体词降级（国家名、通用政治词汇等，在聚类中权重降低，不计入共享词数量）
 COMMON_ENTITY_WORDS = {
     '美国', '中国', '伊朗', '俄罗斯', '乌克兰', '以色列', '朝鲜', '韩国', '日本',
@@ -45,9 +38,7 @@ COMMON_ENTITY_WORDS = {
 }
 
 def _is_zh_junk(word):
-    """判断中文词是否为垃圾词"""
-    if word in ZH_JUNK_WORDS:
-        return True
+    """判断中文词是否为垃圾词（正则匹配 + 纯数字过滤）"""
     if ZH_JUNK_PATTERN.search(word):
         return True
     # 过滤纯数字或数字占比过高的词
@@ -593,7 +584,7 @@ def extract_hot_topics(news_list):
             current = []
             for w, f in words_flags:
                 w = w.strip()
-                if not w or w.isdigit() or len(w) == 1 or w in TOPIC_STOP_WORDS or w in ZH_JUNK_WORDS or _is_zh_junk(w):
+                if not w or w.isdigit() or len(w) == 1 or w in BASE_STOP_WORDS:
                     if current:
                         chunks.append(current)
                         current = []
