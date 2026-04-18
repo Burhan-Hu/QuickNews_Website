@@ -11,16 +11,69 @@ import json
 from collections import defaultdict
 from datetime import datetime, timedelta
 
-from core.stopwords import BASE_STOP_WORDS, TOPIC_STOP_WORDS, TOPIC_BLOCK_WORDS
+# 停用词（用于话题聚类）
+STOP_WORDS = {'的', '了', '在', '是', '我', '有', '和', '就', '不', '人', '都', '一', 
+            '一个', '上', '也', '很', '到', '说', '要', '去', '你', '会', '着', '没有', '看', '好', 
+            '自己', '这', '那', '这些', '那些', '这个', '那个', '之', '与', '及', '或', '但', '而', '然而', '因为',
+            '所以', '因此', '如果', '即使', '虽然', '尽管', '如此', '便', '由', '被', '把', '给', '让', '向', '往', 
+            '自', '从', '到', '关于', '对于', '为了', '为着', '除', '除了', '除去', 'the', 'be', 'to', 'of', 'and', 
+            'a', 'in', 'that', 'have', 'i', 'it', 'for', 'not', 'on', 'with', 'he', 'as', 'you', 'do', 'at', 'this',
+            'but', 'his', 'by', 'from', 'they', 'we', 'say', 'her', 'she', 'or', 'an', 'will', 'my', 'one', 'all', 
+            'would', 'there', 'their', 'what', 'so', 'up', 'out', 'if', 'about', 'who', 'get', 'which', 'go', 'me',
+            'when', 'make', 'can', 'like', 'time', 'no', 'just', 'him', 'know', 'take', 'people', 'into', 'year', 
+            'your', 'good', 'some', 'could', 'them', 'see', 'other', 'than', 'then', 'now', 'look', 'only', 'come',
+            'its', 'over', 'think', 'also', 'back', 'after', 'use', 'two', 'how', 'our', 'work', 'first', 'well',
+            'way', 'even', 'new', 'want', 'because', 'any', 'these', 'give', 'day', 'most', 'us', 'is', 'was', 'are',
+            'were', 'been', 'has', 'had', 'did', 'does',
+            # 中文经济与政治常用停用词
+            '同比', '环比', '预增', '预降', '预计', '营收', '净利润', '归母'}
 
-# 中文垃圾词过滤（整词匹配 + 正则）
-ZH_JUNK_PATTERN = re.compile('|'.join([
+# 垃圾词汇过滤（HTML元素、UI按钮、网站模板等）
+JUNK_WORDS = {
+    # HTML/UI元素
+    'saveclick', 'share', 'click', 'button', 'btn', 'link', 'href', 'class', 'id', 'div', 'span',
+    'homepage', 'posts', 'post', 'page', 'nav', 'menu', 'sidebar', 'footer', 'header', 'main',
+    'secondsplay', 'video', 'audio', 'image', 'img', 'svg', 'icon', 'logo', 'banner',
+    # 网站功能词汇
+    'subscribe', 'follow', 'login', 'signin', 'register', 'comment', 'reply', 'share', 'like',
+    'download', 'upload', 'search', 'more', 'read', 'view', 'click', 'tap', 'swipe',
+    # 时间格式
+    'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december',
+    'jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec',
+    'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
+    'today', 'yesterday', 'tomorrow', 'day', 'week', 'month', 'year',
+    # 常见无意义组合
+    'artemis', 'earth', 'minister', 'talks', 'said', 'says', 'report', 'reports', 'according',
+    'ap', 'reuters', 'afp', 'bbc', 'cnn', 'fox', 'news', 'breaking', 'update', 'live',
+    # 新增：更多UI残留和通用无意义词
+    'play', 'save', 'copy', 'paste', 'print', 'email', 'twitter', 'facebook', 'weibo', 'wechat',
+    'whatsapp', 'telegram', 'linkedin', 'reddit', 'pinterest', 'tumblr', 'vk', 'ok', 'qq',
+    'related', 'recommended', 'popular', 'trending', 'latest', 'featured', 'editor', 'pick',
+    'gallery', 'slideshow', 'podcast', 'newsletter', 'alert', 'notification', 'popup', 'modal',
+    'cookie', 'privacy', 'policy', 'terms', 'conditions', 'agreement', 'consent', 'gdpr',
+    'skip', 'next', 'prev', 'previous', 'back', 'forward', 'continue', 'read', 'full', 'story',
+    'expand', 'collapse', 'show', 'hide', 'toggle', 'menu', 'close', 'open', 'start', 'stop',
+    'source', 'sources', 'author', 'authors', 'editor', 'editors', 'writer', 'writers',
+    'published', 'updated', 'modified', 'created', 'posted', 'minutes', 'hours', 'ago',
+    'widget', 'module', 'component', 'block', 'section', 'container', 'wrapper', 'holder',
+}
+
+# 中文垃圾短语过滤（正则模式）
+ZH_JUNK_PATTERNS = [
     r'^\d+日?说$', r'^\d+日?称$', r'^\d+日?表示$', r'^\d+日?回应$',
     r'当地时间\d+', r'北京时间\d+', r'\d+月\d+日', r'\d+年\d+月',
     r'对此暂无回应', r'暂无回应', r'乌方对此', r'俄方对此', r'美方对此', r'中方对此',
     r'.*?新华社.*?', r'.*?央视.*?新闻.*?', r'.*?新闻网.*?',
     r'^[一二三四五六七八九十百千万亿]+$',  # 纯数字汉字
-]))
+]
+ZH_JUNK_PATTERN = re.compile('|'.join(ZH_JUNK_PATTERNS))
+
+# 中文特定垃圾词（整词匹配）
+ZH_JUNK_WORDS = {
+    '新华社', '新华网', '央视新闻', '央视网', '人民日报', '环球时报', '界面新闻',
+    '当地时间', '北京时间', '日说', '日称', '日表示', '日回应', '暂无', '对此',
+    '报道称', '据报道', '消息称', '消息人士', '知情人士',
+}
 
 # 通用实体词降级（国家名、通用政治词汇等，在聚类中权重降低，不计入共享词数量）
 COMMON_ENTITY_WORDS = {
@@ -28,7 +81,7 @@ COMMON_ENTITY_WORDS = {
     '英国', '法国', '德国', '印度', '巴基斯坦', '阿富汗', '叙利亚', '伊拉克',
     '土耳其', '埃及', '沙特', '阿联酋', '卡塔尔', '约旦', '黎巴嫩', '也门',
     '政府', '官员', '总统', '部长', '总理', '会谈', '谈判', '表示', '称', '说',
-    '报道', '声明', '回应', '指出', '出席', '认为', '强调', '介绍', '主持', '国际', '国家', '地区',
+    '报道', '声明', '回应', '指出', '认为', '强调', '介绍', '国际', '国家', '地区',
     '城市', '人民', '军队', '军事', '政治', '经济', '社会', '文化', '科技', '外交',
     'trump', 'biden', 'government', 'officials', 'president', 'minister', 'prime',
     'talks', 'negotiations', 'said', 'says', 'reported', 'according', 'statement',
@@ -38,7 +91,9 @@ COMMON_ENTITY_WORDS = {
 }
 
 def _is_zh_junk(word):
-    """判断中文词是否为垃圾词（正则匹配 + 纯数字过滤）"""
+    """判断中文词是否为垃圾词"""
+    if word in ZH_JUNK_WORDS:
+        return True
     if ZH_JUNK_PATTERN.search(word):
         return True
     # 过滤纯数字或数字占比过高的词
@@ -92,11 +147,12 @@ class XMLSearchEngine:
                     # 返回最新新闻（按入库时间排序）
                     sql = """
                         SELECT 
-                            news_id, title, summary, source_url,
-                            created_at, language, has_video,
-                            primary_country_code as country_code
-                        FROM v_news_with_country
-                        ORDER BY created_at DESC
+                            n.news_id, n.title, n.summary, n.source_url,
+                            n.created_at, n.language, n.has_video,
+                            nc.country_code
+                        FROM news n
+                        LEFT JOIN news_countries nc ON n.news_id = nc.news_id AND nc.is_primary = 1
+                        ORDER BY n.created_at DESC
                         LIMIT :limit OFFSET :offset
                     """
                     result = conn.execute(text(sql), {
@@ -151,12 +207,13 @@ class XMLSearchEngine:
                     title_query = clean_query.split(':', 1)[1].strip()
                     sql = """
                         SELECT 
-                            news_id, title, summary, source_url,
-                            created_at, language, has_video,
-                            primary_country_code as country
-                        FROM v_news_with_country
-                        WHERE title LIKE :q
-                        ORDER BY created_at DESC
+                            n.news_id, n.title, n.summary, n.source_url,
+                            n.created_at, n.language, n.has_video,
+                            (SELECT country_code FROM news_countries 
+                             WHERE news_id = n.news_id AND is_primary = 1 LIMIT 1) as country
+                        FROM news n
+                        WHERE n.title LIKE :q
+                        ORDER BY n.created_at DESC
                         LIMIT :limit OFFSET :offset
                     """
                     result = conn.execute(text(sql), {
@@ -257,7 +314,7 @@ class XMLSearchEngine:
         
         for word in words:
             word = word.strip().lower()
-            if not word or word in BASE_STOP_WORDS:
+            if not word or word in STOP_WORDS:
                 continue
             if len(word) >= 2:
                 terms.append(word)
@@ -324,6 +381,77 @@ class XMLSearchEngine:
 search_engine = XMLSearchEngine()
 
 
+def extract_keywords_simple(text_content, language='zh'):
+    """
+    从文本中提取关键词（增强版）
+    - 过滤HTML标签和脚本
+    - 过滤UI元素和常见垃圾词汇
+    - 过滤停用词
+    - 中文使用jieba分词（如可用），否则使用bigram fallback
+    """
+    if not text_content:
+        return set()
+    
+    # 1. 移除HTML标签和脚本内容
+    text_content = re.sub(r'<script[^>]*>.*?</script>', ' ', text_content, flags=re.DOTALL | re.IGNORECASE)
+    text_content = re.sub(r'<style[^>]*>.*?</style>', ' ', text_content, flags=re.DOTALL | re.IGNORECASE)
+    text_content = re.sub(r'<[^>]+>', ' ', text_content)  # 移除所有HTML标签
+    
+    # 2. 预清洗：移除常见UI残留组合（大小写不敏感）
+    ui_patterns = [
+        r'share[-\s]?save[-\s]?click', r'home[-\s]?page[-\s]?posts?', r'seconds[-\s]?play[-\s]?video',
+        r'save[-\s]?click', r'share[-\s]?click', r'read[-\s]?more', r'load[-\s]?more',
+        r'sign[-\s]?up', r'sign[-\s]?in', r'log[-\s]?in', r'follow[-\s]?us',
+    ]
+    for pattern in ui_patterns:
+        text_content = re.sub(pattern, ' ', text_content, flags=re.IGNORECASE)
+    
+    keywords = set()
+    
+    if language == 'zh':
+        # 中文分词：优先使用jieba
+        if _JIEBA_AVAILABLE and jieba:
+            words = jieba.lcut(text_content)
+        else:
+            # Fallback：按空格分割（兼容旧逻辑）
+            words = text_content.split()
+        
+        for word in words:
+            word = word.strip().lower()
+            if not word:
+                continue
+            # 只保留中文和英文数字
+            if not re.match(r'^[\u4e00-\u9fa5a-zA-Z0-9]+$', word):
+                continue
+            # 长度限制
+            if not (2 <= len(word) <= 12):
+                continue
+            if word.isdigit():
+                continue
+            if word in STOP_WORDS:
+                continue
+            if word in JUNK_WORDS:
+                continue
+            if _is_zh_junk(word):
+                continue
+            keywords.add(word)
+    else:
+        words = text_content.lower().split()
+        for word in words:
+            word = word.strip()
+            # 过滤条件
+            if len(word) < 3 or len(word) > 15:  # 长度限制
+                continue
+            if not word.isalpha():  # 非纯字母（过滤数字混合）
+                continue
+            if word in STOP_WORDS:  # 停用词
+                continue
+            if word in JUNK_WORDS:  # 垃圾词汇
+                continue
+            keywords.add(word)
+    
+    return keywords
+
 def _lcs_length(a, b):
     """最长公共连续子串长度"""
     m, n = len(a), len(b)
@@ -388,22 +516,21 @@ EVENT_WORDS = {
 # 直接过滤的模板/属性短语黑名单
 JUNK_PHRASES = {
     # 中文地震/气象模板
-    '震源深度', '震级', '级地震', '余震', '北纬', '东经',
+    '震源深度', '震级', '级地震', '余震', '北纬', '东经', 
     '地震震级', '地震深度', '地震烈度', '震中位置', '震中距',
     # 中文财经模板
-    '收盘价', '开盘价', '市盈率', '市值', '同比增长', '环比下降', '环比上涨', '同比下降', '同比增长率',
-    '同比预增', '同比预降', '环比预增', '环比预降', '归母净利润', '一季度净利润', '一季度营收', '暨',
-    # 通用报道模板（已在分词阶段由 ZH_JUNK_WORDS 截断的不再重复列入）
-    '采访时表示', '对此表示', '会议指出', '会议强调', '会议要求', '会议认为',
-    '发言人表示', '发言人称', '负责人称', '负责人表示',
-    # 气象单位
-    '摄氏度', '降水量', '降水量毫米', '最高气温', '最低气温',
+    '收盘价', '开盘价', '市盈率', '市值','同比增长', '环比下降', '环比上涨', '同比下降', '同比增长率',
+    '同比预增', '同比预降', '环比预增', '环比预降', '归母净利润', '一季度净利润', '一季度营收','暨', 
+    # 通用报道模板
+    '据报道', '消息称', '采访时表示', '对此表示', '会议指出', '会议强调',
+    '会议指出', '会议强调', '会议指出', '会议要求', '会议认为','消息人士称'
+    '发言人表示', '发言人称', '负责人称', '负责人表示','摄氏度', '降水量', '降水量毫米', '最高气温', '最低气温',
     # 英文泛领域词
     'social media', 'artificial intelligence', 'climate change',
     'stock market', 'interest rates', 'inflation rate', 'economic growth',
     'global economy', 'financial markets', 'exchange rate',
     # 纯属性词
-    'population', 'birth rate', 'death toll', 'life expectancy', 'average temperature',
+    'population', 'birth rate','death toll', 'life expectancy', 'average temperature',
 }
 
 # 正则黑名单
@@ -524,7 +651,7 @@ def extract_hot_topics(news_list):
                 return False
             
             # 不能全是普通名词（避免 social media 这类已进黑名单的漏网之鱼）
-            content_count = sum(1 for w in words if w not in common_verbs and w not in TOPIC_STOP_WORDS)
+            content_count = sum(1 for w in words if w not in common_verbs and w not in STOP_WORDS)
             if content_count < 1:
                 return False
             
@@ -544,7 +671,7 @@ def extract_hot_topics(news_list):
                 bonus += 0.3
             
             # 纯实体降级（所有非停用词都是实体）
-            non_stop = [(w, f) for w, f in zip(words, flags) if w not in TOPIC_STOP_WORDS]
+            non_stop = [(w, f) for w, f in zip(words, flags) if w not in STOP_WORDS]
             if non_stop and all(f.startswith(('nr', 'ns', 'nt', 'nz', 'j', 'nrt')) for w, f in non_stop):
                 bonus = 0.2
         else:
@@ -584,7 +711,7 @@ def extract_hot_topics(news_list):
             current = []
             for w, f in words_flags:
                 w = w.strip()
-                if not w or w.isdigit() or len(w) == 1 or w in BASE_STOP_WORDS:
+                if not w or w.isdigit() or len(w) == 1 or w in STOP_WORDS:
                     if current:
                         chunks.append(current)
                         current = []
@@ -607,9 +734,6 @@ def extract_hot_topics(news_list):
                             continue
                         if phrase in JUNK_PHRASES or any(p.match(phrase) for p in JUNK_PHRASE_PATTERNS):
                             continue
-                        # phrase 级别子串黑名单：包含机构名/报道模板词的 phrase 直接过滤
-                        if any(block in phrase for block in TOPIC_BLOCK_WORDS):
-                            continue
                         if phrase not in phrase_data:
                             phrase_data[phrase] = {'news_ids': set(), 'count': 0, 'words': words, 'flags': flags, 'lang': 'zh', 'times': []}
                         phrase_data[phrase]['news_ids'].add(news_id)
@@ -620,7 +744,7 @@ def extract_hot_topics(news_list):
         else:
             # 英文：保留2-gram/3-gram/4-gram
             words = re.findall(r'\b[a-zA-Z]+\b', title.lower())
-            words = [w for w in words if len(w) >= 3 and w not in TOPIC_STOP_WORDS]
+            words = [w for w in words if len(w) >= 3 and w not in STOP_WORDS]
             for n in range(4, 1, -1):
                 if len(words) < n:
                     continue
@@ -741,12 +865,6 @@ def update_hot_topics_internal():
         
         news_list = [(row[0], row[1], row[2] or '', row[3] or 'zh', row[4]) for row in result.fetchall()]
         
-        # 每轮都先清空旧话题，保证展示的是当前窗口的最新快照
-        print("清空旧话题数据...")
-        conn.execute(text("DELETE FROM news_topics"))
-        conn.execute(text("DELETE FROM hot_topics"))
-        conn.commit()
-        
         if len(news_list) < 2:
             print(f"新闻数量不足({len(news_list)}篇)，跳过聚类")
             return 0
@@ -761,6 +879,14 @@ def update_hot_topics_internal():
             return 0
         
         print(f"聚类完成，生成 {len(topics)} 个话题")
+        
+        # 清空旧话题
+        conn.execute(text("""
+            DELETE nt FROM news_topics nt
+            JOIN hot_topics ht ON nt.topic_id = ht.topic_id
+            WHERE ht.is_active = TRUE
+        """))
+        conn.execute(text("DELETE FROM hot_topics WHERE is_active = TRUE"))
         
         # 插入新话题
         inserted_count = 0
@@ -925,13 +1051,15 @@ def get_topic_news():
                 # 查询话题下的新闻
                 result_news = conn.execute(text("""
                     SELECT 
-                        news_id, title, summary, source_url,
-                        created_at, language, has_video,
-                        is_representative,
-                        primary_country_code as country
-                    FROM v_hot_topics_with_news
-                    WHERE topic_id = :topic_id
-                    ORDER BY is_representative DESC, created_at DESC
+                        n.news_id, n.title, n.summary, n.source_url,
+                        n.created_at, n.language, n.has_video,
+                        nt.is_representative,
+                        (SELECT country_code FROM news_countries 
+                         WHERE news_id = n.news_id AND is_primary = 1 LIMIT 1) as country
+                    FROM news n
+                    JOIN news_topics nt ON n.news_id = nt.news_id
+                    WHERE nt.topic_id = :topic_id
+                    ORDER BY nt.is_representative DESC, n.created_at DESC
                     LIMIT :limit
                 """), {'topic_id': topic_id, 'limit': 20})
                 
@@ -1021,8 +1149,12 @@ def get_dashboard():
         with engine.connect() as conn:
             # 1. 国家分布（Top10）
             country_result = conn.execute(text("""
-                SELECT country_code, news_count as cnt
-                FROM v_country_stats_48h
+                SELECT country_code, COUNT(*) as cnt
+                FROM news_countries
+                WHERE news_id IN (SELECT news_id FROM news WHERE created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR))
+                AND is_primary = 1
+                GROUP BY country_code
+                ORDER BY cnt DESC
                 LIMIT 10
             """))
             countries = []
@@ -1052,12 +1184,14 @@ def get_dashboard():
             # 3. 最新新闻（Top20）
             latest_result = conn.execute(text("""
                 SELECT 
-                    news_id, title, summary, source_url,
-                    created_at, language, has_video,
-                    source_name,
-                    primary_country_code as country
-                FROM v_news_with_country
-                ORDER BY created_at DESC
+                    n.news_id, n.title, n.summary, n.source_url,
+                    n.created_at, n.language, n.has_video,
+                    s.source_name,
+                    (SELECT country_code FROM news_countries 
+                     WHERE news_id = n.news_id AND is_primary = 1 LIMIT 1) as country
+                FROM news n
+                JOIN sources s ON n.source_id = s.source_id
+                ORDER BY n.created_at DESC
                 LIMIT 20
             """))
             latest = []
@@ -1096,8 +1230,15 @@ def get_country_stats():
     try:
         with engine.connect() as conn:
             result = conn.execute(text("""
-                SELECT country_code, news_count
-                FROM v_country_stats_48h
+                SELECT 
+                    nc.country_code,
+                    COUNT(DISTINCT nc.news_id) as news_count
+                FROM news_countries nc
+                JOIN news n ON nc.news_id = n.news_id
+                WHERE n.created_at > DATE_SUB(NOW(), INTERVAL 48 HOUR)
+                  AND nc.is_primary = TRUE
+                GROUP BY nc.country_code
+                ORDER BY news_count DESC
             """))
             stats = {}
             for row in result.fetchall():
@@ -1308,12 +1449,14 @@ def get_topic_news_detail(topic_id):
         with engine.connect() as conn:
             result = conn.execute(text("""
                 SELECT 
-                    news_id, title, summary, source_url,
-                    created_at, language, has_video,
-                    primary_country_code as country_code
-                FROM v_hot_topics_with_news
-                WHERE topic_id = :topic_id
-                ORDER BY is_representative DESC, created_at DESC
+                    n.news_id, n.title, n.summary, n.source_url,
+                    n.created_at, n.language, n.has_video,
+                    nc.country_code
+                FROM news n
+                JOIN news_topics nt ON n.news_id = nt.news_id
+                LEFT JOIN news_countries nc ON n.news_id = nc.news_id AND nc.is_primary = 1
+                WHERE nt.topic_id = :topic_id
+                ORDER BY nt.is_representative DESC, n.created_at DESC
                 LIMIT :limit
             """), {'topic_id': topic_id, 'limit': limit})
             
