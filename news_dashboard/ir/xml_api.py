@@ -13,49 +13,18 @@ from datetime import datetime, timedelta
 
 from core.stopwords import BASE_STOP_WORDS, TOPIC_STOP_WORDS
 
-# 垃圾词汇过滤（HTML元素、UI按钮、网站模板等）
-JUNK_WORDS = {
-    # HTML/UI元素
-    'saveclick', 'share', 'click', 'button', 'btn', 'link', 'href', 'class', 'id', 'div', 'span',
-    'homepage', 'posts', 'post', 'page', 'nav', 'menu', 'sidebar', 'footer', 'header', 'main',
-    'secondsplay', 'video', 'audio', 'image', 'img', 'svg', 'icon', 'logo', 'banner',
-    # 网站功能词汇
-    'subscribe', 'follow', 'login', 'signin', 'register', 'comment', 'reply', 'share', 'like',
-    'download', 'upload', 'search', 'more', 'read', 'view', 'click', 'tap', 'swipe',
-    # 时间格式
-    'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december',
-    'jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec',
-    'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
-    'today', 'yesterday', 'tomorrow', 'day', 'week', 'month', 'year',
-    # 常见无意义组合
-    'artemis', 'earth', 'minister', 'talks', 'said', 'says', 'report', 'reports', 'according',
-    'ap', 'reuters', 'afp', 'bbc', 'cnn', 'fox', 'news', 'breaking', 'update', 'live',
-    # 新增：更多UI残留和通用无意义词
-    'play', 'save', 'copy', 'paste', 'print', 'email', 'twitter', 'facebook', 'weibo', 'wechat',
-    'whatsapp', 'telegram', 'linkedin', 'reddit', 'pinterest', 'tumblr', 'vk', 'ok', 'qq',
-    'related', 'recommended', 'popular', 'trending', 'latest', 'featured', 'editor', 'pick',
-    'gallery', 'slideshow', 'podcast', 'newsletter', 'alert', 'notification', 'popup', 'modal',
-    'cookie', 'privacy', 'policy', 'terms', 'conditions', 'agreement', 'consent', 'gdpr',
-    'skip', 'next', 'prev', 'previous', 'back', 'forward', 'continue', 'read', 'full', 'story',
-    'expand', 'collapse', 'show', 'hide', 'toggle', 'menu', 'close', 'open', 'start', 'stop',
-    'source', 'sources', 'author', 'authors', 'editor', 'editors', 'writer', 'writers',
-    'published', 'updated', 'modified', 'created', 'posted', 'minutes', 'hours', 'ago',
-    'widget', 'module', 'component', 'block', 'section', 'container', 'wrapper', 'holder',
-}
-
-# 中文垃圾短语过滤（正则模式）
-ZH_JUNK_PATTERNS = [
+# 中文垃圾词过滤（整词匹配 + 正则）
+ZH_JUNK_PATTERN = re.compile('|'.join([
     r'^\d+日?说$', r'^\d+日?称$', r'^\d+日?表示$', r'^\d+日?回应$',
     r'当地时间\d+', r'北京时间\d+', r'\d+月\d+日', r'\d+年\d+月',
     r'对此暂无回应', r'暂无回应', r'乌方对此', r'俄方对此', r'美方对此', r'中方对此',
     r'.*?新华社.*?', r'.*?央视.*?新闻.*?', r'.*?新闻网.*?',
     r'^[一二三四五六七八九十百千万亿]+$',  # 纯数字汉字
-]
-ZH_JUNK_PATTERN = re.compile('|'.join(ZH_JUNK_PATTERNS))
+]))
 
 # 中文特定垃圾词（整词匹配）
 ZH_JUNK_WORDS = {
-    '新华社', '新华网', '央视新闻', '央视网', '人民日报', '环球时报', '界面新闻','卫星通讯社'
+    '新华社', '新华网', '央视新闻', '央视网', '人民日报', '环球时报', '界面新闻', '卫星通讯社',
     '当地时间', '北京时间', '日说', '日称', '日表示', '日回应', '暂无', '对此',
     '报道称', '据报道', '消息称', '消息人士', '知情人士',
 }
@@ -66,7 +35,7 @@ COMMON_ENTITY_WORDS = {
     '英国', '法国', '德国', '印度', '巴基斯坦', '阿富汗', '叙利亚', '伊拉克',
     '土耳其', '埃及', '沙特', '阿联酋', '卡塔尔', '约旦', '黎巴嫩', '也门',
     '政府', '官员', '总统', '部长', '总理', '会谈', '谈判', '表示', '称', '说',
-    '报道', '声明', '回应', '指出', '出席','认为', '强调', '介绍', '主持','国际', '国家', '地区',
+    '报道', '声明', '回应', '指出', '出席', '认为', '强调', '介绍', '主持', '国际', '国家', '地区',
     '城市', '人民', '军队', '军事', '政治', '经济', '社会', '文化', '科技', '外交',
     'trump', 'biden', 'government', 'officials', 'president', 'minister', 'prime',
     'talks', 'negotiations', 'said', 'says', 'reported', 'according', 'statement',
@@ -364,77 +333,6 @@ class XMLSearchEngine:
 search_engine = XMLSearchEngine()
 
 
-def extract_keywords_simple(text_content, language='zh'):
-    """
-    从文本中提取关键词（增强版）
-    - 过滤HTML标签和脚本
-    - 过滤UI元素和常见垃圾词汇
-    - 过滤停用词
-    - 中文使用jieba分词（如可用），否则使用bigram fallback
-    """
-    if not text_content:
-        return set()
-    
-    # 1. 移除HTML标签和脚本内容
-    text_content = re.sub(r'<script[^>]*>.*?</script>', ' ', text_content, flags=re.DOTALL | re.IGNORECASE)
-    text_content = re.sub(r'<style[^>]*>.*?</style>', ' ', text_content, flags=re.DOTALL | re.IGNORECASE)
-    text_content = re.sub(r'<[^>]+>', ' ', text_content)  # 移除所有HTML标签
-    
-    # 2. 预清洗：移除常见UI残留组合（大小写不敏感）
-    ui_patterns = [
-        r'share[-\s]?save[-\s]?click', r'home[-\s]?page[-\s]?posts?', r'seconds[-\s]?play[-\s]?video',
-        r'save[-\s]?click', r'share[-\s]?click', r'read[-\s]?more', r'load[-\s]?more',
-        r'sign[-\s]?up', r'sign[-\s]?in', r'log[-\s]?in', r'follow[-\s]?us',
-    ]
-    for pattern in ui_patterns:
-        text_content = re.sub(pattern, ' ', text_content, flags=re.IGNORECASE)
-    
-    keywords = set()
-    
-    if language == 'zh':
-        # 中文分词：优先使用jieba
-        if _JIEBA_AVAILABLE and jieba:
-            words = jieba.lcut(text_content)
-        else:
-            # Fallback：按空格分割（兼容旧逻辑）
-            words = text_content.split()
-        
-        for word in words:
-            word = word.strip().lower()
-            if not word:
-                continue
-            # 只保留中文和英文数字
-            if not re.match(r'^[\u4e00-\u9fa5a-zA-Z0-9]+$', word):
-                continue
-            # 长度限制
-            if not (2 <= len(word) <= 12):
-                continue
-            if word.isdigit():
-                continue
-            if word in TOPIC_STOP_WORDS:
-                continue
-            if word in JUNK_WORDS:
-                continue
-            if _is_zh_junk(word):
-                continue
-            keywords.add(word)
-    else:
-        words = text_content.lower().split()
-        for word in words:
-            word = word.strip()
-            # 过滤条件
-            if len(word) < 3 or len(word) > 15:  # 长度限制
-                continue
-            if not word.isalpha():  # 非纯字母（过滤数字混合）
-                continue
-            if word in TOPIC_STOP_WORDS:  # 停用词
-                continue
-            if word in JUNK_WORDS:  # 垃圾词汇
-                continue
-            keywords.add(word)
-    
-    return keywords
-
 def _lcs_length(a, b):
     """最长公共连续子串长度"""
     m, n = len(a), len(b)
@@ -499,21 +397,22 @@ EVENT_WORDS = {
 # 直接过滤的模板/属性短语黑名单
 JUNK_PHRASES = {
     # 中文地震/气象模板
-    '震源深度', '震级', '级地震', '余震', '北纬', '东经', 
+    '震源深度', '震级', '级地震', '余震', '北纬', '东经',
     '地震震级', '地震深度', '地震烈度', '震中位置', '震中距',
     # 中文财经模板
-    '收盘价', '开盘价', '市盈率', '市值','同比增长', '环比下降', '环比上涨', '同比下降', '同比增长率',
-    '同比预增', '同比预降', '环比预增', '环比预降', '归母净利润', '一季度净利润', '一季度营收','暨', 
-    # 通用报道模板
-    '据报道', '消息称', '采访时表示', '对此表示', '会议指出', '会议强调',
-    '会议指出', '会议强调', '会议指出', '会议要求', '会议认为','消息人士称'
-    '发言人表示', '发言人称', '负责人称', '负责人表示','摄氏度', '降水量', '降水量毫米', '最高气温', '最低气温',
+    '收盘价', '开盘价', '市盈率', '市值', '同比增长', '环比下降', '环比上涨', '同比下降', '同比增长率',
+    '同比预增', '同比预降', '环比预增', '环比预降', '归母净利润', '一季度净利润', '一季度营收', '暨',
+    # 通用报道模板（已在分词阶段由 ZH_JUNK_WORDS 截断的不再重复列入）
+    '采访时表示', '对此表示', '会议指出', '会议强调', '会议要求', '会议认为',
+    '发言人表示', '发言人称', '负责人称', '负责人表示',
+    # 气象单位
+    '摄氏度', '降水量', '降水量毫米', '最高气温', '最低气温',
     # 英文泛领域词
     'social media', 'artificial intelligence', 'climate change',
     'stock market', 'interest rates', 'inflation rate', 'economic growth',
     'global economy', 'financial markets', 'exchange rate',
     # 纯属性词
-    'population', 'birth rate','death toll', 'life expectancy', 'average temperature',
+    'population', 'birth rate', 'death toll', 'life expectancy', 'average temperature',
 }
 
 # 正则黑名单
@@ -694,7 +593,7 @@ def extract_hot_topics(news_list):
             current = []
             for w, f in words_flags:
                 w = w.strip()
-                if not w or w.isdigit() or len(w) == 1 or w in TOPIC_STOP_WORDS:
+                if not w or w.isdigit() or len(w) == 1 or w in TOPIC_STOP_WORDS or w in ZH_JUNK_WORDS or _is_zh_junk(w):
                     if current:
                         chunks.append(current)
                         current = []
