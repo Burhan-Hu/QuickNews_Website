@@ -11,7 +11,7 @@ import json
 from collections import defaultdict
 from datetime import datetime, timedelta
 
-from core.stopwords import BASE_STOP_WORDS, TOPIC_STOP_WORDS
+from core.stopwords import BASE_STOP_WORDS, TOPIC_STOP_WORDS, TOPIC_BLOCK_WORDS
 
 # 中文垃圾词过滤（整词匹配 + 正则）
 ZH_JUNK_PATTERN = re.compile('|'.join([
@@ -606,6 +606,9 @@ def extract_hot_topics(news_list):
                         if not _is_valid_phrase(words, flags, language='zh'):
                             continue
                         if phrase in JUNK_PHRASES or any(p.match(phrase) for p in JUNK_PHRASE_PATTERNS):
+                            continue
+                        # phrase 级别子串黑名单：包含机构名/报道模板词的 phrase 直接过滤
+                        if any(block in phrase for block in TOPIC_BLOCK_WORDS):
                             continue
                         if phrase not in phrase_data:
                             phrase_data[phrase] = {'news_ids': set(), 'count': 0, 'words': words, 'flags': flags, 'lang': 'zh', 'times': []}
