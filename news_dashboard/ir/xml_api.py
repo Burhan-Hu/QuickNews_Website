@@ -517,9 +517,9 @@ def extract_hot_topics(news_list):
             if has_entity and has_event:
                 bonus = 1.6      # 实体+事件，最高优先级（伊朗战争）
             elif has_entity:
-                bonus = 0.8      # 有实体但无事件（中国经济圆桌、俄外交部）
+                bonus = 0.5      # 有实体但无事件（中国经济圆桌、俄外交部）
             elif has_event:
-                bonus = 0.5      # 有事件但无实体（较少见）
+                bonus = 0.4      # 有事件但无实体（较少见）
             else:
                 bonus = 0.2      # 纯普通名词组合，只有数量极高才会出现
         else:
