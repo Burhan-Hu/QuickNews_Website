@@ -502,7 +502,7 @@ INSERT INTO sources (source_name, source_url, source_type, language, reliability
 -- RSS来源
 INSERT INTO sources (source_name, source_url, source_type, language, reliability_score) VALUES
 ('36氪', 'https://36kr.com/feed', 'rss', 'zh', 6),
-('虎嗅网', 'https://rss.aishort.top/?type=huxiu', 'rss', 'zh', 6),
+('The Atlantic', 'https://quanwenrss.com/theatlantic', 'rss', 'en', 7),
 ('RT-中文', 'https://www.rt.com/rss/news/', 'rss', 'zh', 7),
 ('FoxNews-World', 'http://feeds.foxnews.com/foxnews/world', 'rss', 'en', 7),
 ('南华早报-SCMP', 'https://feedx.net/rss/scmp.xml', 'rss', 'en', 7),
