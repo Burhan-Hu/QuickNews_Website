@@ -57,9 +57,11 @@ class NewsFetcher:
 
         # 优先尝试最常见容器
         selectors = [
+            'div.article__content',           # 虎嗅网
             'div.article', 'div#content', 'div.main', 'article',
             'div#article-content', 'div.content', 'div#main',
             'div#p-detail', 'div.news-detail', 'section.article',
+            '.post-content', '.entry-content', '.rich_media_content',
         ]
 
         for sel in selectors:
