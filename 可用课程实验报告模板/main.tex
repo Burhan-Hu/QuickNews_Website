@@ -1,0 +1,473 @@
+% -*- coding: utf-8 -*-
+%-------------------------designed by zcf--------------
+\documentclass[UTF8,a4paper,zihao=5]{ctexart}
+\usepackage[left=3.17cm, right=3.17cm, top=2.74cm, bottom=2.74cm]{geometry}
+\usepackage{amsmath}
+\usepackage{graphicx,subfig}
+\usepackage{float}
+\usepackage{cite}
+\usepackage{caption}
+\usepackage{enumerate}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{tikz}
+\usetikzlibrary{shapes.geometric, arrows.meta, positioning, calc, fit, backgrounds}
+\newcommand{\tabincell}[2]{\begin{tabular}{@{}#1@{}}#2\end{tabular}}
+\usepackage{ctex}
+\setCJKmainfont{SimSun}
+\setmainfont{Times New Roman}
+\newcommand{\yihao}{\fontsize{26pt}{36pt}\selectfont}
+\newcommand{\erhao}{\fontsize{22pt}{28pt}\selectfont}
+\newcommand{\xiaoer}{\fontsize{18pt}{18pt}\selectfont}
+\newcommand{\sanhao}{\fontsize{16pt}{24pt}\selectfont}
+\newcommand{\xiaosan}{\fontsize{15pt}{22pt}\selectfont}
+\newcommand{\sihao}{\fontsize{14pt}{21pt}\selectfont}
+\newcommand{\banxiaosi}{\fontsize{13pt}{19.5pt}\selectfont}
+\newcommand{\xiaosi}{\fontsize{12pt}{18pt}\selectfont}
+\newcommand{\dawuhao}{\fontsize{11pt}{11pt}\selectfont}
+\newcommand{\wuhao}{\fontsize{10.5pt}{15.75pt}\selectfont}
+\usepackage{ctexcap} 
+\CTEXsetup[name={,、},number={ \chinese{section}}]{section}
+\CTEXsetup[name={（,）},number={\chinese{subsection}}]{subsection}
+\CTEXsetup[name={,.},number={\arabic{subsubsection}}]{subsubsection}
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\lhead{\kaishu \leftmark}
+\rhead{\kaishu 信息检索课程实验报告}
+\lfoot{}
+\cfoot{\thepage}
+\rfoot{}
+\renewcommand{\headrulewidth}{0.1pt}  
+\renewcommand{\footrulewidth}{0pt}
+\newcommand{\HRule}{\rule{\linewidth}{0.5mm}}
+\newcommand{\HRulegrossa}{\rule{\linewidth}{1.2mm}}
+\usepackage{algorithm}  
+\usepackage{algorithmicx}  
+\usepackage{algpseudocode}  
+\floatname{algorithm}{Algorithm}  
+\renewcommand{\algorithmicrequire}{\textbf{Input:}}  
+\renewcommand{\algorithmicensure}{\textbf{Output:}} 
+\usepackage{lipsum}  
+\makeatletter
+\newenvironment{breakablealgorithm}
+  {%
+  \begin{center}
+     \refstepcounter{algorithm}
+     \hrule height.8pt depth0pt \kern2pt
+     \renewcommand{\caption}[2][\relax]{%
+      {\raggedright\textbf{\ALG@name~\thealgorithm} ##2\par}%
+      \ifx\relax##1\relax
+         \addcontentsline{loa}{algorithm}{\protect\numberline{\thealgorithm}##2}%
+      \else
+         \addcontentsline{loa}{algorithm}{\protect\numberline{\thealgorithm}##1}%
+      \fi
+      \kern2pt\hrule\kern2pt
+     }
+  }{%
+     \kern2pt\hrule\relax
+  \end{center}
+  }
+\makeatother
+\usepackage{xcolor} 
+\usepackage{listings} 
+\lstset{ 
+breaklines,
+basicstyle=\small,
+escapeinside=``,
+keywordstyle=\color{ blue!70} \bfseries,
+commentstyle=\color{red!50!green!50!blue!50},
+stringstyle=\ttfamily,
+extendedchars=false,
+linewidth=\textwidth,
+numbers=left,
+numberstyle=\tiny \color{blue!50},
+frame=trbl
+rulesepcolor= \color{ red!20!green!20!blue!20} 
+}
+\usepackage[colorlinks,linkcolor=black,anchorcolor=blue]{hyperref}
+\usepackage{enumitem,amssymb}
+\newlist{todolist}{itemize}{2}
+\setlist[todolist]{label=$\square$}
+\usepackage{pifont}
+\newcommand{\cmark}{\ding{51}}%
+\newcommand{\xmark}{\ding{55}}%
+\newcommand{\done}{\rlap{$\square$}{\raisebox{2pt}{\large\hspace{1pt}\cmark}}\hspace{-2.5pt}}
+\newcommand{\wontfix}{\rlap{$\square$}{\large\hspace{1pt}\xmark}}
+\usepackage{tikz}
+\usepackage{xcolor}
+\usepackage{eso-pic}
+
+\newcommand{\watermark}[3]{\AddToShipoutPictureBG{
+\parbox[b][\paperheight]{\paperwidth}{
+\vfill%
+\centering%
+\tikz[remember picture, overlay]%
+  \node [rotate = #1, scale = #2] at (current page.center)%
+    {\textcolor{gray!80!cyan!30!magenta!30}{#3}};
+\vfill}}}
+
+
+
+%———————————————————————————————————————————正文———————————————————————————————————————————————
+\begin{document}
+\begin{titlepage}
+    \begin{center}
+    \includegraphics[width=0.8\textwidth]{NKU.png}\\[1cm]    
+    \textsc{\Huge \kaishu{\textbf{南\ \ \ \ \ 开\ \ \ \ \ 大\ \ \ \ \ 学}} }\\[0.9cm]
+    \HRule \\[0.9cm]
+    { \LARGE \bfseries 基于事件短语提取的热点新闻检索系统}\\[0.4cm]
+    \HRule \\[2.0cm]
+    \centering
+    \textsc{\LARGE 胡博涵\kaishu{\ \ \ \ }}\\[0.5cm]
+    \textsc{\LARGE \kaishu{学号:2410886}}\\[0.5cm]
+    \textsc{\LARGE \kaishu{专业\ :\ 物联网工程}}\\[0.5cm]
+    \vfill
+    {\Large \today}
+    \end{center}
+\end{titlepage}
+
+\newpage
+    
+%----------------------------------------------------------------
+\tableofcontents
+%----------------------------------------------------------------
+\newpage
+% \watermark{60}{10}{NKU}
+\setcounter{page}{1}
+
+%----------------------------------------------------------------
+\section{引言}
+%----------------------------------------------------------------
+
+在信息爆炸的时代，互联网每天产生数以亿计的新闻报道。用户面临着严重的信息过载问题，难以从海量数据中快速获取有价值的热点事件。传统的新闻平台依赖人工编辑筛选热点，成本高、时效性差；而简单的词频统计方法只能提取高频词，无法区分"中国"（背景信息）和"伊朗战争"（具体事件），导致热点话题的语义粒度粗糙。
+
+信息检索（Information Retrieval, IR）系统旨在根据用户的信息需求，从大规模文档集合中高效地找出相关文档。本次实验构建了一个面向新闻领域的信息检索系统，核心贡献在于：
+\begin{enumerate}
+  \item 基于倒排索引实现关键词检索，支持 SRU（Search/Retrieve via URL）标准协议；
+  \item 基于中文词性标注的事件短语提取算法，自动从新闻标题中识别热点话题；
+  \item 采用加权评分机制，区分"实体+事件"型话题与纯背景实体，提升热点质量。
+\end{enumerate}
+
+本系统聚焦于 IR 基础理论的实际落地：分词与停用词过滤、倒排索引构建、TF 加权、查询处理与结果排序。热点提取部分不依赖深度学习或主题模型，而是通过 jieba 词性标注和启发式规则实现实时话题发现，与课程讲授的索引和检索原理直接对应。
+
+%----------------------------------------------------------------
+\section{相关工作}
+%----------------------------------------------------------------
+
+热点话题提取是信息检索与自然语言处理的交叉领域，现有技术路线多样。表\ref{tab:related}对比了主流方法的特点。
+
+\begin{table}[!htbp]
+  \centering
+  \caption{现有热点话题提取技术对比}
+  \label{tab:related}
+  \begin{tabular}{p{3cm}p{4cm}p{3.5cm}p{3.5cm}}
+  \toprule
+  技术 & 原理 & 好处 & 坏处 \\
+  \midrule
+  TF-IDF词频统计 & 统计高频词或n-gram短语 & 简单高效、无需训练、实时性好 & 无法区分背景词与事件词，噪音大 \\
+  LDA主题模型 & 文档-主题概率分布推断 & 发现潜在语义主题 & 训练耗时、需要大量语料、不适合实时热点 \\
+  TextRank关键词 & 基于图排序提取关键词 & 无需训练数据、可解释性强 & 单文档视角，难以跨文档聚合事件 \\
+  实体链接 & 将文本实体链接到知识库 & 语义精准、可关联背景知识 & 强依赖外部知识库、新事件覆盖率低 \\
+  基于词性的事件短语提取 & 利用词性标注提取"实体+动词"短语 & 实时、事件粒度细、无需训练 & 依赖分词质量、新词识别有限 \\
+  \bottomrule
+  \end{tabular}
+\end{table}
+
+TF-IDF 是最基础的统计方法，通过计算词频与逆文档频率的乘积衡量词语重要性。其优势在于计算简单、易于实现，但缺陷同样明显：高频背景词（如"中国""美国"）会获得高分，而真正的事件短语（如"伊朗战争""中国访问"）反而被淹没。此外，TF-IDF 只关注独立词语，无法捕捉多词事件短语的语义完整性。
+
+LDA（Latent Dirichlet Allocation）通过概率生成模型推断文档的主题分布，适合发现长期稳定的主题趋势。但 LDA 需要迭代训练，计算开销大，对实时新闻场景的响应能力不足。TextRank 将词语看作图中的节点，基于共现关系迭代计算重要性，但本质仍是词级别的提取，缺乏对事件结构的建模。
+
+实体链接方法将文本中的 mention 映射到知识库中的实体，可以获得丰富的背景信息。然而，该方法对知识库的覆盖率要求极高，对于突发新闻中的新实体、新事件往往束手无策。
+
+本系统采用的"基于词性标注的事件短语提取"方法，核心思想源于对中文新闻标题语言规律的观察：新闻标题通常遵循"实体+事件"的压缩结构，如"伊朗发动战争""中国经济圆桌会举行"。通过 jieba 词性标注识别命名实体（ns/nr/nt/nz）和动词/事件词，提取包含实体的事件短语，相比纯统计方法具有更强的语义指向性。与 LDA、TextRank 相比，该方法无需训练、计算开销小，更适合实时热点发现；与实体链接相比，它不依赖外部知识库，对新事件的适应能力更强。其主要局限在于对分词质量敏感，若 jieba 未能正确识别专有名词，会导致短语碎片化。
+
+%----------------------------------------------------------------
+\section{系统框架}
+%----------------------------------------------------------------
+
+\subsection{系统架构}
+
+本系统采用分层架构设计，如图\ref{fig:architecture}所示，自底向上分为数据采集层、索引构建层、检索服务层。数据采集层负责从 RSS 源、API 接口和网络爬虫获取新闻原始数据；索引构建层对新闻内容进行清洗、分词和倒排索引构建；检索服务层提供 SRU 标准搜索接口和热点话题提取服务，最终将结果推送至前端展示。
+
+\begin{figure}[H]
+    \centering
+    \begin{tikzpicture}[
+        node distance=0.6cm and 1.0cm,
+        box/.style={rectangle, draw, fill=blue!8, rounded corners, minimum width=2.0cm, minimum height=0.7cm, align=center, font=\footnotesize},
+        db/.style={cylinder, shape border rotate=90, draw, fill=orange!8, minimum width=1.4cm, minimum height=0.7cm, align=center, font=\footnotesize},
+        layer/.style={rectangle, draw, dashed, inner sep=0.4cm, rounded corners=3pt},
+        arrow/.style={->, >=Stealth, thick},
+        dasharrow/.style={->, >=Stealth, thick, dashed, red!70!black},
+        font=\small
+    ]
+    
+    % 数据采集层
+    \node[box] (rss) at (-4.5,0) {RSS源};
+    \node[box] (api) at (-2.2,0) {API接口};
+    \node[box] (spider) at (0,0) {网络爬虫};
+    \node[box] (source) at (3,0) {新闻源};
+    
+    \begin{scope}[on background layer]
+        \node[layer, fit=(rss)(api)(spider)(source), label={[layerlabel]above:\textbf{数据采集层}}] (datalayer) {};
+    \end{scope}
+    
+    % 索引构建层
+    \node[box] (processor) at (-3,2.2) {ContentProcessor};
+    \node[box] (tokenizer) at (-0.5,2.2) {jieba分词};
+    \node[db] (inverted) at (2.5,2.2) {倒排索引};
+    
+    \begin{scope}[on background layer]
+        \node[layer, fit=(processor)(tokenizer)(inverted), label={[layerlabel]above:\textbf{索引构建层}}] (indexlayer) {};
+    \end{scope}
+    
+    % 检索服务层
+    \node[box] (sru) at (-3.5,4.4) {XML Search API};
+    \node[box] (hot) at (-0.5,4.4) {热点话题提取};
+    \node[box] (frontend) at (3,4.4) {前端展示};
+    
+    \begin{scope}[on background layer]
+        \node[layer, fit=(sru)(hot)(frontend), label={[layerlabel]above:\textbf{检索服务层}}] (servicelayer) {};
+    \end{scope}
+    
+    % 新闻入库流（蓝色实线）
+    \draw[arrow, blue!70!black] (rss) -- (source);
+    \draw[arrow, blue!70!black] (api) -- (source);
+    \draw[arrow, blue!70!black] (spider) -- (source);
+    \draw[arrow, blue!70!black] (source) -- (processor);
+    \draw[arrow, blue!70!black] (processor) -- (tokenizer);
+    \draw[arrow, blue!70!black] (tokenizer) -- (inverted);
+    \draw[arrow, blue!70!black] (inverted) -- (sru);
+    
+    % 热点话题流（红色虚线）
+    \draw[dasharrow] (source) -- ++(0,-0.9) -| (hot);
+    
+    % 输出
+    \draw[arrow] (sru) -- (frontend);
+    \draw[arrow] (hot) -- (frontend);
+    
+    \end{tikzpicture}
+    \caption{系统整体架构}
+    \label{fig:architecture}
+\end{figure}
+
+\subsection{数据处理Pipeline}
+
+系统核心的数据流动如图\ref{fig:pipeline}所示，分为新闻入库流和查询检索流两条主线。此外，右下分支展示了热点话题提取的独立处理流程。
+
+\begin{figure}[H]
+    \centering
+    \begin{tikzpicture}[
+        node distance=0.5cm and 0.8cm,
+        process/.style={rectangle, draw, fill=blue!5, rounded corners, minimum width=2.4cm, minimum height=0.6cm, align=center, font=\footnotesize},
+        data/.style={rectangle, draw, fill=green!5, rounded corners, minimum width=2.4cm, minimum height=0.6cm, align=center, font=\footnotesize},
+        arrow/.style={->, >=Stealth, thick},
+        dasharrow/.style={->, >=Stealth, thick, dashed, gray},
+        font=\small
+    ]
+    
+    % 上行：新闻入库流
+    \node[process] (html) at (0,4) {原始新闻HTML};
+    \node[process] (clean) at (2.8,4) {\_clean\_html()};
+    \node[data] (cleantext) at (5.6,4) {清洗后文本};
+    \node[process] (lang) at (8.4,4) {detect\_language()};
+    \node[data] (langtag) at (11,4) {语言标记};
+    
+    \node[process] (token) at (2.8,2.8) {\_tokenize()};
+    \node[data] (terms) at (5.6,2.8) {词项列表};
+    \node[process] (index) at (8.4,2.8) {inverted\_index};
+    
+    \draw[arrow] (html) -- (clean);
+    \draw[arrow] (clean) -- (cleantext);
+    \draw[arrow] (cleantext) -- (lang);
+    \draw[arrow] (lang) -- (langtag);
+    \draw[arrow, dashed] (cleantext) -- (token);
+    \draw[arrow] (token) -- (terms);
+    \draw[arrow] (terms) -- (index);
+    
+    % 下行：查询检索流
+    \node[process] (query) at (0,1.2) {用户查询};
+    \node[process] (qtoken) at (2.8,1.2) {\_tokenize\_query()};
+    \node[process] (search) at (5.6,1.2) {查inverted\_index};
+    \node[process] (agg) at (8.4,1.2) {聚合排序};
+    \node[data] (xml) at (11,1.2) {SRU XML响应};
+    
+    \draw[arrow] (query) -- (qtoken);
+    \draw[arrow] (qtoken) -- (search);
+    \draw[arrow] (search) -- (agg);
+    \draw[arrow] (agg) -- (xml);
+    \draw[arrow, dashed] (index) -- (search);
+    
+    % 右下：热点提取流
+    \node[process] (newsdb) at (0,-0.6) {news数据};
+    \node[process] (jieba) at (2.8,-0.6) {jieba.posseg};
+    \node[process] (chunks) at (5.6,-0.6) {chunks截断};
+    \node[process] (ngram) at (8.4,-0.6) {n-gram生成};
+    \node[process] (score) at (11,-0.6) {评分排序};
+    \node[data] (hotout) at (11,-1.8) {热点话题};
+    
+    \draw[arrow] (newsdb) -- (jieba);
+    \draw[arrow] (jieba) -- (chunks);
+    \draw[arrow] (chunks) -- (ngram);
+    \draw[arrow] (ngram) -- (score);
+    \draw[arrow] (score) -- (hotout);
+    
+    \end{tikzpicture}
+    \caption{数据处理Pipeline}
+    \label{fig:pipeline}
+\end{figure}
+
+新闻入库流的具体步骤为：原始 HTML 经过正则清洗去除标签和特殊字符；通过中文字符占比判断语言类型；使用 jieba 分词并过滤停用词，保留长度大于等于2的有效词项；最终构建以 term 为键、以 (news\_id, tf\_weight) 为值的倒排索引结构。查询检索流则对用户的查询字符串执行相同的分词与停用词过滤，通过倒排索引快速定位包含查询词的文档集合，按匹配度和 TF 权重排序返回结果。热点提取流独立运行，定时从新闻库中读取48小时内的标题数据，经过分词、截断、n-gram生成和评分排序后输出热点话题列表。
+
+%----------------------------------------------------------------
+\section{核心方法}
+%----------------------------------------------------------------
+
+\subsection{倒排索引构建}
+
+倒排索引（Inverted Index）是信息检索系统的核心数据结构，其本质是一个从词项（term）到文档列表的映射。本系统的索引构建流程如下：
+
+首先，对每篇新闻的标题和正文进行预处理。预处理包括 HTML 标签清洗、正则过滤非中文字母数字字符、jieba 分词和停用词过滤。停用词表分为基础停用词（虚词、代词等）和扩展停用词（财经模板词如"同比""环比"），确保索引和查询使用同一套词表，避免查询时被索引端过滤的词语导致检索失败。
+
+分词后，计算每个词项在文档中的词频（TF），并赋予 tf\_weight 权重。权重计算公式为简单的词频统计，未引入复杂的 TF-IDF 变体，以保证索引构建的实时性。最终，每个词项对应一个包含 (news\_id, tf\_weight, language) 的记录列表，形成倒排索引的核心结构。
+
+\subsection{检索流程}
+
+检索流程遵循标准的倒排索引查询模式，但针对新闻场景做了若干适配：
+
+\begin{enumerate}
+  \item \textbf{查询分词}：对用户输入的查询字符串执行与索引构建完全相同的分词和停用词过滤流程，确保查询词与索引词的一致性。
+  \item \textbf{多词匹配}：系统支持多个查询词的联合检索。通过 SQL 的 IN 子句在倒排索引中匹配所有查询词，按 news\_id 分组聚合，计算每个文档的匹配词项数（match\_count）和总权重（score）。
+  \item \textbf{相关性阈值}：要求 match\_count 不低于查询词数量的一半（$match\_count \geq len(term\_list) \times 0.5$），避免少量词项匹配但相关性低的文档进入结果。
+  \item \textbf{时间衰减}：新闻具有时效性，系统默认只检索48小时内入库的新闻，通过 created\_at 字段过滤旧文档。
+\end{enumerate}
+
+\subsection{热点话题提取}
+
+热点话题提取是本系统的创新点，核心算法基于对新闻标题中"事件短语"的识别。算法流程如下：
+
+\textbf{Step 1：标题分词与截断}。使用 jieba.posseg 对每篇新闻标题进行词性标注，然后按停用词、单字和数字进行截断，将标题切分为若干连续片段（chunk）。
+
+\textbf{Step 2：n-gram短语生成}。在每个 chunk 内部，从4-gram到2-gram滑动生成候选短语。短语长度限制为4到20个字符，过滤过长或过短的片段。
+
+\textbf{Step 3：短语评分}。本系统设计了四档 bonus 评分机制，区分不同语义质量的短语：
+
+\begin{itemize}
+  \item \textbf{实体+事件}（bonus=1.6）：短语同时包含命名实体（ns/nr/nt/nz）和事件迹象（动词或 EVENT\_WORDS 中的强事件词），如"伊朗战争""中国访问"。
+  \item \textbf{有实体无事件}（bonus=0.5）：短语包含命名实体但无明确事件词，如"中国经济圆桌""俄外交部"。
+  \item \textbf{有事件无实体}（bonus=0.4）：短语包含事件词但无命名实体，较少见。
+  \item \textbf{无实体无事件}（bonus=0.2）：纯普通名词组合，只有出现频率极高时才会上榜。
+\end{itemize}
+
+评分公式综合了文档频率（doc\_freq）、平均逆文档频率（avg\_idf）、短语长度（length\_bonus）、事件性加权（event\_bonus）和时间衰减（time\_bonus）：
+\begin{equation}
+  score = doc\_freq \times avg\_idf \times (1 + 0.12 \times length) \times event\_bonus \times time\_bonus
+\end{equation}
+
+\textbf{Step 4：去重合并}。采用两阶段去重策略：首先基于最长公共子串（LCS）进行相似度合并，当两个短语的 LCS 占较短者比例超过25\%时判定为重复；其次，若两个短语关联的新闻 ID 集合完全相同，则只保留得分较高的一个。这一机制有效解决了"高德动量机器人官宣"和"首次亮相亦庄"从同一批新闻中提取出两个不同表述的问题。
+
+%----------------------------------------------------------------
+\section{系统实现}
+%----------------------------------------------------------------
+
+\subsection{落地存储}
+
+系统的存储层采用 MySQL 作为持久化数据库，承接实时爬虫写入的新闻数据与检索系统生成的索引数据。数据采集层通过 APScheduler 调度框架协调 RSS 源、API 接口和网络爬虫三类抓取源，每20分钟执行一轮全量抓取任务，将原始新闻的标题、正文、来源 URL 和时间戳实时写入数据库。这种定时调度机制既保证了新闻数据的持续更新，又通过合理的请求间隔避免了对源站造成过大压力。爬虫模块支持失败重试和去重机制，同一 URL 的新闻不会重复入库。
+
+倒排索引在逻辑上是一个 $term \rightarrow [(doc\_id, tf\_weight)]$ 的映射结构，落地为关系表形式存储。每条记录包含词项、新闻 ID、词频权重和语言标记四个核心字段，通过复合索引加速 term 查询。热点话题的存储保持轻量，仅记录话题名称、关联新闻 ID 列表、新闻数量和时间范围。系统默认维护48小时时间窗口内的数据，超过窗口期的新闻及其索引记录会被定时任务清理，以保证存储空间的可控性和热点话题的实时性。
+
+值得强调的是，索引构建和查询检索共用同一套停用词表，该表以 Python 模块形式独立于数据库存储。这一设计确保了索引端和查询端的词项过滤规则完全一致，从根本上避免了因停用词不一致导致的检索失败——例如某词在索引时被保留、在查询时被过滤，或反之。
+
+\subsection{检索方式}
+
+检索服务兼容 SRU（Search/Retrieve via URL）协议，返回 XML 格式的响应，便于前端解析和展示。系统支持三种检索模式：
+
+\begin{enumerate}
+  \item \textbf{全量浏览}（查询为"*"）：返回最新入库的新闻，按时间倒序排列，不经过倒排索引，直接从新闻表拉取最新记录。
+  \item \textbf{国家筛选}（查询格式为"country:XX"）：按国家代码精确匹配新闻的归属地，适用于按地域维度浏览新闻的场景。
+  \item \textbf{关键词搜索}：对普通查询字符串执行分词和倒排索引检索，按 TF 权重和匹配度排序。支持中英文混合查询，系统自动检测查询语言并选择对应索引。
+\end{enumerate}
+
+\subsection{核心代码}
+
+以下是系统的三段核心代码，分别展示了查询分词的一致性保障、热点话题的评分分档策略以及去重逻辑。
+
+\textbf{代码段1：查询分词}。查询分词流程与索引构建使用同一套停用词表，确保查询端和索引端的词项过滤规则完全一致，避免因停用词不一致导致的检索失败。
+
+\begin{lstlisting}[title=查询分词函数,frame=trbl,language={Python}]
+def _tokenize_query(self, query):
+    query = re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9\s]', ' ', query)
+    words = jieba.lcut(query)
+    terms = []
+    for word in words:
+        word = word.strip().lower()
+        if not word or word in STOP_WORDS or len(word) < 2:
+            continue
+        terms.append(word)
+    return list(set(terms))
+\end{lstlisting}
+
+\textbf{代码段2：热点话题评分分档}。通过 has\_entity 和 has\_event 两个布尔条件将短语分为四档，分别赋予不同的 bonus 权重，实现"有实体打高分、没实体打低分"的差异化评分。
+
+\begin{lstlisting}[title=事件性加权得分,frame=trbl,language={Python}]
+def _get_event_bonus(words, flags, language='zh'):
+    has_entity = any(f.startswith(('nr','ns','nt','nz')) 
+                     for f in flags)
+    has_event = any(
+        (f.startswith('v') and w not in common_verbs) 
+        or w in EVENT_WORDS
+        for w, f in zip(words, flags)
+    )
+    if has_entity and has_event:
+        return 1.6
+    elif has_entity:
+        return 0.5
+    elif has_event:
+        return 0.4
+    else:
+        return 0.2
+\end{lstlisting}
+
+\textbf{代码段3：去重合并}。在 LCS 重叠合并的基础上，增加关联新闻 ID 完全相同判重，解决同一批新闻被不同短语重复表示的问题。
+
+\begin{lstlisting}[title=LCS合并与news_ids判重,frame=trbl,language={Python}]
+for phrase, score, doc_freq, news_ids, times in scored_phrases:
+    is_dup = False
+    # LCS 25%阈值去重
+    for merged_phrase, _, _, _, _ in merged:
+        if phrase in merged_phrase or merged_phrase in phrase:
+            is_dup = True
+            break
+        lcs = _lcs_length(phrase, merged_phrase)
+        shorter = min(len(phrase), len(merged_phrase))
+        if shorter > 0 and lcs / shorter > 0.25:
+            is_dup = True
+            break
+    # 关联新闻完全相同则判重
+    if not is_dup:
+        for _, _, _, existing_news_ids, _ in merged:
+            if news_ids == existing_news_ids:
+                is_dup = True
+                break
+    if not is_dup:
+        merged.append((phrase, score, doc_freq, news_ids, times))
+\end{lstlisting}
+
+%----------------------------------------------------------------
+\section{总结}
+%----------------------------------------------------------------
+
+本次实验构建了一个完整的热点新闻检索系统，涵盖了从数据采集、索引构建、查询检索到热点话题提取的全链路。系统基于倒排索引实现了高效的关键词检索，并通过 SRU 协议提供标准化的搜索接口。在热点话题提取方面，本系统创新性地提出了基于词性标注的事件短语识别方法，通过"实体+事件"的评分分档机制，有效区分了高质量事件话题与低频背景实体。
+
+实验过程中的主要收获包括：深入理解了倒排索引的构建与查询原理，掌握了中文分词和停用词过滤在检索一致性中的关键作用，以及认识到启发式规则在实时信息提取场景中的实用价值。同时，通过 APScheduler 调度框架与 MySQL 存储的配合，体会到了实时数据流处理系统在落地时的工程权衡。
+
+系统的局限同样明显。首先，热点提取强依赖 jieba 分词的准确性，对于未被词典收录的新词（如"消博会"），会出现切分碎片化导致提取失败的问题。其次，纯机构名短语（如"俄外交部"）虽被降权但仍可能进入热点列表，说明实体类型细粒度过滤仍有优化空间。未来的改进方向包括引入自定义词典提升新词识别能力，以及考虑用更轻量的统计方法辅助事件短语发现，降低对单一分词工具的依赖。
+
+\begin{thebibliography}{99}
+\bibitem{1} Manning C D, Raghavan P, Schütze H. Introduction to information retrieval[M]. Cambridge University Press, 2008.
+\bibitem{2} 宗成庆. 统计自然语言处理[M]. 清华大学出版社, 2013.
+\bibitem{3} Blei D M, Ng A Y, Jordan M I. Latent dirichlet allocation[J]. Journal of machine Learning research, 2003, 3: 993-1022.
+\bibitem{4} Mihalcea R, Tarau P. TextRank: Bringing order into text[C]. EMNLP 2004: 404-411.
+\bibitem{5} 李航. 信息检索导论[M]. 北京大学出版社, 2019.
+\end{thebibliography}
+
+\end{document}

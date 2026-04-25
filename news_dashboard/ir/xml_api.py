@@ -41,14 +41,19 @@ STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file
 app = Flask(__name__, static_folder=STATIC_DIR, static_url_path='')
 
 # 配置 CORS，允许前端开发服务器访问
+# 生产环境通过 CORS_ORIGINS 环境变量配置，多个域名用逗号分隔
+CORS_ORIGINS = os.environ.get('CORS_ORIGINS', 'http://localhost:5173,http://127.0.0.1:5173').split(',')
+if '*' in CORS_ORIGINS:
+    CORS_ORIGINS = '*'
+
 CORS(app, resources={
     r"/api/*": {
-        "origins": ["http://localhost:5173", "http://127.0.0.1:5173"],
+        "origins": CORS_ORIGINS,
         "methods": ["GET", "POST", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"]
     },
     r"/sru*": {
-        "origins": ["http://localhost:5173", "http://127.0.0.1:5173"],
+        "origins": CORS_ORIGINS,
         "methods": ["GET", "OPTIONS"],
         "allow_headers": ["Content-Type"]
     },
