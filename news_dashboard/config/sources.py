@@ -30,7 +30,7 @@ COUNTRY_CODES = [
 RSS_SOURCES = [
     # 国内源（中文，优先）
     {'name': '36氪', 'url': 'https://36kr.com/feed', 'lang': 'zh', 'category': 'tech'},
-    {'name': '虎嗅网', 'url': 'https://rss.aishort.top/?type=huxiu', 'lang': 'zh', 'category': 'tech'},
+    {'name': 'The Atlantic', 'url': 'https://quanwenrss.com/theatlantic', 'lang': 'en', 'category': 'politics'},
     {'name': '凤凰网-军事', 'url': 'https://feedx.net/rss/ifengmil.xml', 'lang': 'zh', 'category': 'military', 'country_hint': 'CN'},
     
     # 国际源

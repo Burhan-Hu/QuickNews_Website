@@ -37,7 +37,7 @@ class ContentProcessor:
         'NewsAPI': 1,
         # RSS 来源（与 schema.sql 插入顺序严格一致）
         '36氪': 2,
-        '虎嗅网': 3,
+        'The Atlantic': 3,
         'RT-中文': 4,
         'FoxNews-World': 5,
         '南华早报-SCMP': 6,
