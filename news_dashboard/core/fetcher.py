@@ -256,6 +256,22 @@ class NewsFetcher:
                     # 清理HTML标签获取纯文本内容
                     content_text = strip_tags(raw_content) if raw_content else ''
                     
+                    # 【修复】如果内容只有图片/为空/太短，尝试抓取详情页
+                    if not content_text or len(content_text) < 100:
+                        article_url = entry.get('link', '')
+                        if article_url:
+                            try:
+                                full_content = self._fetch_full_page_content(article_url)
+                                if full_content and len(full_content) > 200:
+                                    content_text = full_content
+                                    print(f"  [RSS] {source_config['name']} 详情页抓取成功: {len(content_text)} 字")
+                            except Exception as e:
+                                print(f"  [RSS] {source_config['name']} 详情页抓取失败: {str(e)[:60]}")
+                    
+                    # 保底：如果还是为空，用标题作为内容（确保能入库）
+                    if not content_text or not content_text.strip():
+                        content_text = entry.get('title', '')
+                    
                     # 获取并清洗标题
                     title = entry.get('title', '无标题')
                     # 针对 RFI-中文去除来源后缀，避免影响国家识别

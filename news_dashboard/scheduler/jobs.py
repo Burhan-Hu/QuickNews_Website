@@ -89,29 +89,17 @@ class NewsScheduler:
             total_failed += f
             del rss_articles  # 释放内存
         
-        # 3. HTML源（逐个抓取并保存，防止内存累积）
-        html_fetcher = self.fetcher.html_fetcher
-        html_sources = [
-            ("界面新闻", html_fetcher.fetch_jiemian),
-            ("新华网", html_fetcher.fetch_xinhua),
-            ("环球时报", html_fetcher.fetch_globaltimes),
-            ("Sputnik", html_fetcher.fetch_sputnik),
-            ("纽约时报", html_fetcher.fetch_nytimes_cn),
-            ("半岛电视台", html_fetcher.fetch_aljazeera),
-        ]
-        
-        for source_name, fetch_func in html_sources:
-            try:
-                articles = fetch_func()
-                if articles:
-                    total_fetched += len(articles)
-                    s, f = self._process_and_save(articles, source_name)
-                    total_saved += s
-                    total_failed += f
-                    del articles  # 立即释放内存
-            except Exception as e:
-                print(f"[Job] {source_name} 抓取失败: {e}")
-                continue
+        # 3. HTML源（使用 fetch_all_html_sources 统一抓取，避免漏源）
+        try:
+            html_articles = self.fetcher.html_fetcher.fetch_all_html_sources()
+            if html_articles:
+                total_fetched += len(html_articles)
+                s, f = self._process_and_save(html_articles, "HTML Sources")
+                total_saved += s
+                total_failed += f
+                del html_articles
+        except Exception as e:
+            print(f"[Job] HTML源抓取失败: {e}")
         
         # 更新统计
         self.stats['articles_fetched'] += total_fetched
