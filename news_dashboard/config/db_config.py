@@ -5,11 +5,11 @@ import os
 # 数据库配置 - 优先从环境变量读取（ClawCloud 部署用）
 # 本地开发可通过环境变量覆盖
 DB_CONFIG = {
-    'host': os.environ.get('DB_HOST', 'mysql-2a94e8c4-quicknews.c.aivencloud.com'),
-    'port': int(os.environ.get('DB_PORT', 17710)),
-    'user': os.environ.get('DB_USER', 'avnadmin'),
+    'host': os.environ.get('DB_HOST', 'localhost'),
+    'port': int(os.environ.get('DB_PORT', 3306)),
+    'user': os.environ.get('DB_USER', 'root'),
     'password': os.environ.get('DB_PASSWORD', ''),
-    'database': os.environ.get('DB_NAME', 'quicknews_maindb'),
+    'database': os.environ.get('DB_NAME', 'quicknews'),
 }
 
 def get_engine():
